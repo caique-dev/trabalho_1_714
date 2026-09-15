@@ -1,0 +1,5 @@
+# O simulador (src/simulador.py, src/politicas.py, src/analitico.py) usa
+# apenas a biblioteca padrão. As dependências abaixo servem à campanha
+# experimental, aos gráficos e aos testes.
+matplotlib>=3.5
+pytest>=7.0
