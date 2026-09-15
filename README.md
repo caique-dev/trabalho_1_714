@@ -92,6 +92,50 @@ Medidas na janela `[warmup, duração]`, descartando o período de aquecimento:
   (integral no tempo ÷ duração da janela), conforme a dica do enunciado.
 - **U_i** — utilização de cada servidor: fração do tempo com `n_i > 0`.
 
+## Resultados obtidos
+
+Campanha completa (10 réplicas, 5000 u.t., warm-up de 500 u.t., µ = 1,0). Todos
+os números abaixo saem de `resultados/comparacao.csv`.
+
+**Validação do modelo (itens (c), (d) e (e)):**
+
+- **Vazão e utilização independem da política** — para as três políticas,
+  `X ≈ λ` e `U_i ≈ ρ = λ/3µ` com erro abaixo de 0,6%, confirmando o argumento
+  de conservação de trabalho do item (c).
+- **Lei de Little** — `E[N]` contra `X · E[R]` fecha com erro máximo de
+  **0,13%** em todas as 15 configurações.
+- **Ordenação do item (d)** — `E[R]` de Fila Mais Curta ≤ Round Robin ≤
+  Aleatória em todos os λ, e a Aleatória adere ao analítico `1/(µ − λ/3)`.
+
+**Ganho percentual de E[R] em relação à política aleatória:**
+
+| λ | ρ | Round Robin | Fila Mais Curta |
+|---:|---:|---:|---:|
+| 0,6 | 0,20 | +14,5% | +17,7% |
+| 1,2 | 0,40 | +23,0% | +32,4% |
+| 1,8 | 0,60 | +28,7% | +44,2% |
+| 2,4 | 0,80 | +31,4% | +54,7% |
+| 2,7 | 0,90 | +28,7% | +58,3% |
+
+O ganho cresce com a carga: quanto maior ρ, mais caro é o desperdício de
+mandar uma requisição para um servidor ocupado enquanto outro está livre —
+exatamente o que a política de fila mais curta evita.
+
+**Ponto de atenção para o relatório.** Em λ = 2,7 (ρ = 0,9) o `E[R]` simulado
+da política aleatória fica ~8,9% *abaixo* do analítico (9,11 contra 10,00),
+enquanto para λ ≤ 2,4 o erro é de no máximo 2,2%. Não é um bug: é o viés de
+horizonte finito típico de carga alta — em ρ = 0,9 o tempo de relaxação da
+fila M/M/1 cresce como `1/(1−ρ)²`, e 5000 u.t. com 500 de aquecimento não
+bastam para o sistema esquecer o estado inicial vazio. Rodar mais tempo
+(ou aumentar o warm-up) aproxima o valor do analítico; vale citar o efeito
+na discussão em vez de escondê-lo.
+
+**Cenário instável (item (f)).** Com λ = 3,3 > 3µ, a vazão satura na
+capacidade agregada (`X ≈ 3,00` para as três políticas) e `N(t)` cresce
+linearmente, acompanhando a aproximação fluida `(λ − 3µ)·t`. As três curvas
+praticamente se sobrepõem: com todos os servidores saturados, a política de
+roteamento deixa de importar.
+
 ## Divisão de trabalho
 
 A ser preenchida pela dupla, de forma compatível com o histórico de commits.
