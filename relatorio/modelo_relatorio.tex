@@ -189,10 +189,11 @@ há descartes, partem também $\lambda T$. Dividindo por $T$,
 \end{equation}
 para as três políticas.
 
-Cada requisição consome $E[S]=1/\mu$ unidades de tempo de servidor, portanto
-a carga agregada é $\lambda/\mu$. Como $U_i$ é a fração de tempo ocupado, a
-soma das utilizações é o número médio de servidores ocupados e mede esse
-mesmo trabalho:
+A Lei de Little aplicada ao subsistema das requisições \emph{em execução},
+ que recebe todas elas, à taxa $X=\lambda$, e as retém por $E[S]=1/\mu$,
+dá $\lambda/\mu$ como número médio de requisições em serviço. Como o
+servidor $i$ está ocupado exatamente quando tem uma em execução, $U_i$ é a
+probabilidade disso, e a soma das utilizações é esse mesmo número médio:
 \begin{equation}
  U_1+U_2+U_3=\frac{\lambda}{\mu}.
  \label{eq:utilizacao-agregada}
@@ -377,7 +378,7 @@ $E[R]$ foi de no máximo 2,16\%, e o IC contém a curva em todos os quatro
 pontos. Em $\lambda=2{,}7$, o valor simulado foi $9{,}110\pm0{,}706$ e o IC
 $[8{,}40;9{,}82]$ não contém a previsão 10 (desvio de $-8{,}9$\%). 
 
-O desvio observado em $\lambda=2{,}7$ pode ser explicado pela condição inicial da simulação, que começa com as filas vazias. Para $\rho=0{,}9$, cada servidor teria em regime estacionário $E[N_i]=9$ requisições em média, de modo que o sistema parte de um estado muito abaixo do equilíbrio. Como a carga está próxima da saturação, as filas apresentam flutuações maiores e a influência do estado inicial demora mais para desaparecer. Assim, o período de aquecimento de 500 u.t. pode não ser suficiente para eliminar completamente esse efeito, fazendo com que parte da janela de medição ainda apresente filas menores que as esperadas e, consequentemente, valores de $E[N]$ e $E[R]$ ligeiramente abaixo do analítico. Para cargas menores, o nível estacionário é mais próximo de zero e esse viés é menos significativo.
+O desvio em $\lambda=2{,}7$ é o viés de horizonte finito, não um erro do simulador. A execução parte com as filas vazias, muito abaixo do nível estacionário $E[N_i]=9$ correspondente a $\rho=0{,}9$; como a carga está próxima da saturação, as flutuações são grandes e a influência do estado inicial decai lentamente, de modo que as 500 u.t.\ de aquecimento não a eliminam e parte da janela ainda mede filas menores que as de equilíbrio. O padrão dos desvios confirma o diagnóstico: $E[N]$ e $E[R]$ caem na mesma proporção ($-9{,}1$\% e $-8{,}9$\%) enquanto $X$ permanece correto, que é exatamente o efeito de um transiente de fila, a vazão é fixada pela taxa de chegada, mas o nível das filas ainda não subiu. Alongando o horizonte, o viés desaparece: $E[R]=9{,}754\pm0{,}499$ com 20000 u.t., e $E[R]=9{,}997\pm0{,}321$ com $E[N]=27{,}01\pm0{,}89$ com 50000 u.t.\ e 5000 u.t.\ de aquecimento, contra os 10 e 27 previstos. Para cargas menores o nível estacionário é mais baixo e o viés é desprezível. 
 
 \subsection{Lei de Little (item e)}
 
@@ -403,10 +404,16 @@ máximo $3\mu$; a aproximação fluida é, portanto,
  \label{eq:fluida}
 \end{equation}
 Na simulação, as vazões de A, RR e FC foram 3,001, 3,004 e 3,007 req./u.t.:
-a saída satura na capacidade, não na chegada. Ao fim de 5000 u.t., $N(t)$
-somou 1656, 1643 e 1630 requisições, contra 1500 previstos pela reta fluida;
-as inclinações ajustadas, entre 0,326 e 0,331, ficaram próximas de 0,3
-(Fig.~\ref{fig:instavel}). As três curvas quase se sobrepõem: com todos os
+a saída satura na capacidade, não na chegada. As inclinações médias de
+$N(t)$ foram 0,331, 0,329 e 0,326 req./u.t., contra os 0,3 da reta fluida
+nominal (Fig.~\ref{fig:instavel}). A diferença é da réplica, não do modelo:
+este cenário é uma execução única, na qual chegaram 16663 requisições em
+5000 u.t., ou seja $\hat{\lambda}=3{,}333$, uma flutuação de $1{,}3$
+desvios-padrão em uma contagem de Poisson de média 16500 e desvio
+$\sqrt{16500}\approx128$. Substituindo $\lambda$ por $\hat{\lambda}$ em
+(\ref{eq:fluida}), a inclinação prevista passa a 0,333 e o acúmulo final a
+1663 requisições, dos quais os três valores simulados (1656, 1643 e 1630)
+distam no máximo 2,0\%. As três curvas quase se sobrepõem: com todos os
 servidores permanentemente ocupados, o roteamento torna-se irrelevante.
 
 \begin{figure}[t]
