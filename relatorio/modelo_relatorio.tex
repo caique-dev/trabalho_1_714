@@ -41,8 +41,11 @@ resposta em até 58,3\%. Com $\lambda=3{,}3>3\mu$, a vazão saturou em
 
 Em sistemas distribuídos, o balanceamento distribui requisições para evitar
 a sobrecarga de alguns servidores e a ociosidade de outros. Este trabalho
-implementa o sistema proposto, modela analiticamente a política aleatória e
-compara as três políticas por simulação.
+implementa o sistema proposto, modela analiticamente a escolha aleatória e a
+compara, por simulação, com Round Robin e fila mais curta. A Seção II apresenta o sistema e as
+políticas; a Seção III desenvolve os itens analíticos (a)--(c); as Seções IV
+e V descrevem o simulador e o desenho experimental; a Seção VI discute os
+resultados dos itens (d)--(f); e a Seção VII apresenta as conclusões.
 
 \section{Sistema e políticas}
 
@@ -80,17 +83,29 @@ são comparadas ao modelo por simulação.
 
 \subsection{(a) Decomposição das chegadas}
 
-Na política aleatória, cada chegada Poisson é marcada, independentemente,
-com o índice do servidor escolhido, cuja probabilidade é $p_i=1/3$. Pelo
-teorema da decomposição (\emph{splitting}), os eventos com cada marca formam
-processos de Poisson mutuamente independentes, com taxas $p_i\lambda$.
-Portanto,
+Seja $N(t)$ o número de chegadas ao balanceador até o instante $t$. Por
+hipótese, $N(t)$ é um processo de Poisson de taxa $\lambda$. Na política
+aleatória, cada chegada recebe, independentemente, a marca
+$i\in\{1,2,3\}$ do servidor escolhido, com probabilidade $p_i=1/3$. Seja
+$N_i(t)$ a contagem das chegadas que receberam a marca $i$.
+
+O teorema da decomposição (\emph{splitting}) afirma que a marcação
+independente de um processo de Poisson produz um processo de Poisson para
+cada marca. A taxa do subprocesso $i$ é a taxa original multiplicada pela
+probabilidade da marca. De fato, em um intervalo de duração $\Delta t$
+ocorrem, em média, $\lambda\Delta t$ chegadas; a fração média destinada ao
+servidor $i$ é $p_i$, resultando em $p_i\lambda\Delta t$ chegadas. Como
+$p_i=1/3$,
 \begin{equation}
  \lambda_i=p_i\lambda=\frac{\lambda}{3},\qquad i=1,2,3.
  \label{eq:splitting}
 \end{equation}
-Logo, cada servidor recebe um Poisson de taxa $\lambda/3$; a independência
-decorre de o destino de uma chegada não alterar o das demais.
+O cálculo da média determina a taxa, enquanto o teorema garante que cada
+$N_i(t)$ continua sendo Poisson e que os três subprocessos são mutuamente
+independentes. Essa independência decorre da marcação: o servidor sorteado
+para uma chegada não influencia o sorteio das demais. Portanto, sob a
+política aleatória, cada servidor recebe um processo de Poisson independente
+de taxa $\lambda/3$.
 
 \subsection{(b) Filas M/M/1, métricas e estabilidade}
 
@@ -167,10 +182,17 @@ $\lambda$ & $\rho$ & $U_i$ & $E[N_i]$ & $E[T_Q]$ & $E[R]$ & $X$ \\
 O roteamento escolhe \emph{qual} servidor atenderá, mas não altera as
 chegadas nem o trabalho de cada requisição. Em uma janela longa $T$, entram
 em média $\lambda T$ requisições. No regime estável não há acúmulo; como não
-há descartes, partem também $\lambda T$, logo $X=\lambda$ nas três políticas.
+há descartes, partem também $\lambda T$. Dividindo por $T$,
+\begin{equation}
+ X=\lambda
+ \label{eq:vazao-conservacao}
+\end{equation}
+para as três políticas.
 
-Cada requisição consome $E[S]=1/\mu$ unidades de tempo de servidor. Portanto,
-a carga agregada é $\lambda/\mu$, igual à soma das frações de tempo ocupado:
+Cada requisição consome $E[S]=1/\mu$ unidades de tempo de servidor, portanto
+a carga agregada é $\lambda/\mu$. Como $U_i$ é a fração de tempo ocupado, a
+soma das utilizações é o número médio de servidores ocupados e mede esse
+mesmo trabalho:
 \begin{equation}
  U_1+U_2+U_3=\frac{\lambda}{\mu}.
  \label{eq:utilizacao-agregada}
@@ -196,19 +218,23 @@ e escalonamento reais não interferem no modelo.
 
 \subsection{Fila de eventos e tratamento}
 
-Um heap binário ordena os eventos por (instante, tipo, ordem de inserção).
-Há \texttt{CHEGADA}, \texttt{PARTIDA} e \texttt{LOG}, este último apenas
-para amostrar ocupações. Em empates temporais, a partida vem primeiro e
-libera o servidor antes da nova alocação.
+Os eventos futuros ficam em um heap binário, uma fila de prioridade que
+remove primeiro o evento de menor instante. Cada item é ordenado por
+(instante, tipo, ordem de inserção). Há três tipos: \texttt{CHEGADA}, quando
+uma requisição alcança o balanceador; \texttt{PARTIDA}, quando um serviço
+termina; e \texttt{LOG}, que apenas registra as ocupações periodicamente. Em
+empates temporais, a partida vem primeiro e libera o servidor antes da nova
+alocação.
 
-Cada servidor mantém uma \texttt{deque} de pares (chegada, serviço). O
-primeiro item está em execução; os demais aguardam em ordem FCFS. Em uma
-\texttt{CHEGADA}$(t)$, o balanceador lê as ocupações, aplica a política e
-insere a requisição no fim da fila. Se ela estava vazia, inicia o serviço e
-agenda a partida para $t+\text{serviço}$. Em uma \texttt{PARTIDA}$(t)$,
-remove o primeiro item e registra $R=t-t_{\mathrm{chegada}}$; se houver
-outro, ele inicia imediatamente e sua partida é agendada. Assim, apenas uma
-requisição é executada por servidor e a ordem FCFS é preservada.
+Cada servidor mantém uma \texttt{deque} de pares (instante de chegada,
+tempo de serviço). O primeiro item é a requisição em execução; os demais
+aguardam atrás dele em ordem FCFS. Em uma \texttt{CHEGADA}$(t)$, o
+balanceador lê as ocupações, aplica a política e insere a nova requisição no
+fim da fila. Se ela estava vazia, inicia o serviço e agenda a partida para
+$t+\text{serviço}$. Em uma \texttt{PARTIDA}$(t)$, remove a requisição em
+execução e registra $R=t-t_{\mathrm{chegada}}$; se houver outra aguardando,
+ela inicia imediatamente e sua partida é agendada. Assim, cada servidor
+executa no máximo uma requisição e preserva a ordem FCFS.
 
 \subsection{Coleta de métricas}
 
@@ -216,29 +242,36 @@ As métricas cobrem $[500,5000]$, uma janela de 4500 u.t.; as primeiras
 500 u.t.\ são aquecimento (\emph{warm-up}) e removem o transiente inicial.
 Antes de cada evento, o simulador integra o estado vigente: se $N(t)=n$ por
 $\Delta t$, soma $n\Delta t$ à área de $N$; se o servidor $i$ está ocupado,
-soma $\Delta t$ ao seu tempo ocupado. Assim,
+soma $\Delta t$ ao seu tempo ocupado. Intervalos que cruzam o instante 500
+são recortados, contabilizando-se apenas a parcela posterior ao aquecimento.
+Assim,
 $E[N]=\int_{500}^{5000}N(t)\,dt/4500$ e
 $U_i=\text{tempo ocupado}_i/4500$. Por fim,
 $X=\text{partidas}/4500$, e $E[R]$ é a média das respostas das requisições
-que partem na janela.
+que partem na janela. Desse modo, $E[N]$ é uma média ao longo do tempo, e
+não uma média das ocupações observadas apenas nas chegadas.
 
 \subsection{Reprodutibilidade e validação}
 
-Geradores separados produzem chegadas, serviços e decisões de política. O
-serviço é sorteado na chegada; assim, numa réplica, as políticas recebem os
-mesmos instantes e demandas, mudando apenas o roteamento. Esses números
-aleatórios comuns tornam a comparação pareada e reduzem sua variância.
-Testes automatizados verificam RR, empates da FC, conservação,
-reprodutibilidade, $E[R]\to E[S]$ em carga baixa, Lei de Little e os regimes
-estável e instável. Instruções de execução estão no README.
+Três geradores separados produzem chegadas, serviços e decisões de política.
+Essa separação impede que os sorteios de uma política alterem a sequência de
+chegadas ou serviços. O serviço é sorteado na chegada e acompanha a
+requisição. Numa réplica, as políticas
+recebem os mesmos instantes e demandas, mudando apenas o roteamento. Esses
+números aleatórios comuns tornam a comparação pareada e reduzem sua
+variância. Os testes automatizados verificam RR, empates da FC,
+conservação, reprodutibilidade, $E[R]\to E[S]$ em carga baixa, Lei de Little
+e os regimes estável e instável. Instruções de execução estão no README.
 
 \section{Desenho experimental}
 
-As 15 configurações (5 valores de $\lambda$ $\times$ 3 políticas) tiveram
-10 sementes, 5000 u.t.\ de duração e 500 u.t.\ de aquecimento. Para uma
+As 15 configurações combinam
+$\lambda\in\{0{,}6;1{,}2;1{,}8;2{,}4;2{,}7\}$ com as três políticas. Cada
+uma teve 10 sementes, 5000 u.t.\ de duração e 500 u.t.\ de aquecimento. Para uma
 métrica, $\bar{x}$ é a média e $s$ o desvio-padrão das réplicas. Como há
 apenas 10 amostras e o desvio populacional é desconhecido, usa-se a
-$t$ de Student, que incorpora a incerteza de estimá-lo por $s$. O IC
+$t$ de Student com $n-1=9$ graus de liberdade. Suas caudas mais largas
+incorporam a incerteza de estimar o desvio por $s$. O IC
 bilateral de 95\% é
 \begin{equation}
  \bar{x}\ \pm\ t_{0{,}975;9}\,\frac{s}{\sqrt{10}},
@@ -300,9 +333,11 @@ produto das médias.}
 \subsection{Tempo de resposta e políticas (item d)}
 
 A Fig.~\ref{fig:comparacoes} compara o $E[R]$ simulado das três políticas
-com a curva M/M/1 da aleatória, dada por (\ref{eq:er}). Como apenas a
-aleatória satisfaz as hipóteses M/M/1, a curva é uma previsão exata somente
-para essa política; RR e FC são comparadas a ela experimentalmente. Em todas
+com a curva M/M/1 da aleatória, dada por (\ref{eq:er}). Apenas ela recebe,
+em cada servidor, chegadas Poisson independentes. No RR, as chegadas por
+servidor têm intervalos Erlang-3; na FC, o destino depende do estado das três
+filas, que ficam acopladas. Portanto, a curva é uma previsão exata somente
+para a aleatória; RR e FC são comparadas a ela experimentalmente. Em todas
 as cinco cargas, observou-se
 \begin{equation}
  E[R]_{\mathrm{FC}}\le E[R]_{\mathrm{RR}}\le E[R]_{\mathrm{A}}
@@ -311,8 +346,9 @@ as cinco cargas, observou-se
 \end{equation}
 A explicação está na forma como cada política distribui as chegadas. No RR,
 cada servidor recebe uma a cada três chegadas globais. O intervalo entre suas
-chegadas é, portanto, a soma de três exponenciais (Erlang-3), menos variável
-que uma exponencial de mesma média; menos rajadas reduzem a espera. A FC usa
+chegadas é, portanto, a soma de três exponenciais (Erlang-3), cujo
+coeficiente de variação $1/\sqrt{3}$ é menor que o valor 1 da exponencial;
+menos rajadas reduzem a espera. A FC usa
 informação adicional: observa a ocupação atual e evita enviar uma requisição
 para uma fila maior enquanto existe uma menor. Por isso, reduz diretamente o
 desequilíbrio entre os servidores e obtém a menor espera.
@@ -341,7 +377,7 @@ $E[R]$ foi de no máximo 2,16\%, e o IC contém a curva em todos os quatro
 pontos. Em $\lambda=2{,}7$, o valor simulado foi $9{,}110\pm0{,}706$ e o IC
 $[8{,}40;9{,}82]$ não contém a previsão 10 (desvio de $-8{,}9$\%). 
 
-O desvio observado em $\lambda=2{,}7$ pode ser explicado pela condição inicial da simulação, que começa com as filas vazias. Para $\rho=0{,}9$, cada servidor teria em regime estacionário $E[N_i]=9$ requisições em média, de modo que o sistema parte de um estado muito abaixo do equilíbrio. Como a carga está próxima da saturação, as filas apresentam flutuações maiores e a influência do estado inicial demora mais para desaparecer. Assim, o período de aquecimento de 500 u.t. pode não ser suficiente para eliminar completamente esse efeito, fazendo com que parte da janela de medição ainda apresente filas menores que as esperadas e, consequentemente, valores de $E[N]$ e $E[R]$ ligeiramente abaixo do analítico. Para cargas menores, o nível estacionário é mais próximo de zero e esse viés é muito menos significativo.
+O desvio observado em $\lambda=2{,}7$ pode ser explicado pela condição inicial da simulação, que começa com as filas vazias. Para $\rho=0{,}9$, cada servidor teria em regime estacionário $E[N_i]=9$ requisições em média, de modo que o sistema parte de um estado muito abaixo do equilíbrio. Como a carga está próxima da saturação, as filas apresentam flutuações maiores e a influência do estado inicial demora mais para desaparecer. Assim, o período de aquecimento de 500 u.t. pode não ser suficiente para eliminar completamente esse efeito, fazendo com que parte da janela de medição ainda apresente filas menores que as esperadas e, consequentemente, valores de $E[N]$ e $E[R]$ ligeiramente abaixo do analítico. Para cargas menores, o nível estacionário é mais próximo de zero e esse viés é menos significativo.
 
 \subsection{Lei de Little (item e)}
 
@@ -356,9 +392,10 @@ da janela de medição.
 
 \subsection{Regime instável (item f)}
 
-Para $\lambda=3{,}3>3\mu=3$, a chegada excede a capacidade agregada; não há
-regime estacionário e $E[N]$, $E[T_Q]$ e $E[R]$ crescem sem limite. Por isso,
-as fórmulas estacionárias da Seção~III-B não se aplicam. Depois que os três
+Para $\lambda=3{,}3>3\mu=3$, a chegada excede a capacidade agregada e
+$\rho=1{,}1>1$. A série geométrica de (\ref{eq:pk}) diverge: não há regime
+estacionário, e $E[N]$, $E[T_Q]$ e $E[R]$ crescem sem limite. Portanto, as
+fórmulas estacionárias da Seção~III-B não se aplicam. Depois que os três
 servidores ficam ocupados, o sistema recebe a taxa $\lambda$ e escoa no
 máximo $3\mu$; a aproximação fluida é, portanto,
 \begin{equation}
@@ -381,6 +418,7 @@ comparação.}
 \label{fig:instavel}
 \end{figure}
 
+\noindent\begin{minipage}{\columnwidth}
 \section{Conclusão}
 
 O simulador de eventos discretos do balanceador foi validado de três formas:
@@ -400,5 +438,6 @@ reduz a espera, mas não substitui capacidade.
 políticas, e execução da campanha experimental.
 \textit{Luiz Henrique Marques Gonçalves:} derivação analítica, análise dos
 resultados e redação do relatório.
+\end{minipage}
 
 \end{document}
