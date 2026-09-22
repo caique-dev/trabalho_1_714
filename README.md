@@ -100,7 +100,7 @@ os números abaixo saem de `resultados/comparacao.csv`.
 **Validação do modelo (itens (c), (d) e (e)):**
 
 - **Vazão e utilização independem da política** — para as três políticas,
-  `X ≈ λ` e `U_i ≈ ρ = λ/3µ` com erro abaixo de 0,6%, confirmando o argumento
+  `X ≈ λ` e `U_i ≈ ρ = λ/3µ` com erro abaixo de 0,7%, confirmando o argumento
   de conservação de trabalho do item (c).
 - **Lei de Little** — `E[N]` contra `X · E[R]` fecha com erro máximo de
   **0,13%** em todas as 15 configurações.
@@ -123,12 +123,10 @@ exatamente o que a política de fila mais curta evita.
 
 **Ponto de atenção para o relatório.** Em λ = 2,7 (ρ = 0,9) o `E[R]` simulado
 da política aleatória fica ~8,9% *abaixo* do analítico (9,11 contra 10,00),
-enquanto para λ ≤ 2,4 o erro é de no máximo 2,2%. Não é um bug: é o viés de
-horizonte finito típico de carga alta — em ρ = 0,9 o tempo de relaxação da
-fila M/M/1 cresce como `1/(1−ρ)²`, e 5000 u.t. com 500 de aquecimento não
-bastam para o sistema esquecer o estado inicial vazio. Rodar mais tempo
-(ou aumentar o warm-up) aproxima o valor do analítico; vale citar o efeito
-na discussão em vez de escondê-lo.
+enquanto para λ ≤ 2,4 o erro é de no máximo 2,2%. Não é um bug: é o viés de horizonte finito. A execução começa vazia, muito
+abaixo da média estacionária `E[N_i] = 9` para ρ = 0,9; o aquecimento de
+500 u.t. não elimina completamente a influência desse estado inicial. Rodar
+mais tempo (ou aumentar o warm-up) aproxima o valor do analítico;
 
 **Cenário instável (item (f)).** Com λ = 3,3 > 3µ, a vazão satura na
 capacidade agregada (`X ≈ 3,00` para as três políticas) e `N(t)` cresce
@@ -138,4 +136,7 @@ roteamento deixa de importar.
 
 ## Divisão de trabalho
 
-A ser preenchida pela dupla, de forma compatível com o histórico de commits.
+- **Caique Pinheiro Andrade:** implementação do simulador e das políticas, e
+  execução da campanha experimental.
+- **Luiz Henrique Marques Gonçalves:** derivação analítica, análise dos
+  resultados e redação do relatório.

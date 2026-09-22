@@ -10,6 +10,15 @@ resultados/
 *.png
 *.csv
 
+# Artefatos de compilação do relatório LaTeX
+relatorio/*.aux
+relatorio/*.fdb_latexmk
+relatorio/*.fls
+relatorio/*.log
+relatorio/*.out
+relatorio/*.synctex.gz
+relatorio/modelo_relatorio.pdf
+
 # Editores / SO
 .vscode/
 .idea/

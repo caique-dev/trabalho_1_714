@@ -1,0 +1,404 @@
+\documentclass[conference,a4paper]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage{placeins}
+
+\graphicspath{{../resultados/}}
+
+\title{Avaliação de Políticas de Balanceamento de Carga em um Sistema Distribuído}
+
+\author{%
+  \IEEEauthorblockN{Caique Pinheiro Andrade e Luiz Henrique Marques Gonçalves}
+  \IEEEauthorblockA{Instituto de Computação -- Universidade Estadual de Campinas\\
+  MC714 -- Sistemas Distribuídos -- 2º semestre de 2026\\
+  \texttt{c204677@dac.unicamp.br, l183218@dac.unicamp.br}}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Este trabalho avalia, por modelo analítico e simulação, um balanceador que
+distribui chegadas Poisson entre três servidores homogêneos, cada um com uma
+fila FCFS e serviço exponencial de taxa $\mu=1$. Comparam-se as políticas
+aleatória, Round Robin e fila mais curta. Na aleatória, a decomposição do
+processo de Poisson produz três filas M/M/1 independentes de taxa
+$\lambda/3$. Nas 15 configurações estáveis (10 réplicas cada), vazão e
+utilização diferiram do previsto em no máximo 0,45\% e 0,66\%, e a Lei de
+Little teve erro máximo de 0,13\%. A fila mais curta reduziu o tempo médio de
+resposta em até 58,3\%. Com $\lambda=3{,}3>3\mu$, a vazão saturou em
+3 req./u.t.\ e $N(t)$ cresceu aproximadamente como $(\lambda-3\mu)t$.
+\end{abstract}
+
+\section{Introdução}
+
+Em sistemas distribuídos, o balanceamento distribui requisições para evitar
+a sobrecarga de alguns servidores e a ociosidade de outros. Este trabalho
+implementa o sistema proposto, modela analiticamente a política aleatória e
+compara as três políticas por simulação.
+
+\section{Sistema e políticas}
+
+\subsection{Modelo do sistema}
+
+O sistema tem dois componentes. O balanceador recebe todas as requisições e
+é instantâneo: decide o destino e encaminha sem consumir tempo. Os três
+servidores são homogêneos; cada um tem uma única
+thread de execução, atende uma requisição por vez e mantém as demais em uma
+fila FCFS (\emph{First Come, First Served}) ilimitada.
+
+As chegadas ao balanceador são Poisson de taxa $\lambda$; portanto, os
+tempos entre chegadas são exponenciais independentes de média $1/\lambda$.
+O serviço é exponencial de média $1/\mu$, com $\mu=1$ req./u.t.\ e
+$E[S]=1$ u.t. A intensidade por servidor é
+$\rho=\lambda/(3\mu)$, e a estabilidade exige $\rho<1$, ou
+$\lambda<3\mu$.
+
+\subsection{Políticas de roteamento}
+
+Foram implementadas três políticas de balanceamento, selecionáveis pela
+linha de comando do simulador: \textbf{aleatória (A)}, que sorteia o
+servidor de cada requisição com probabilidade $1/3$, de forma
+independente; \textbf{Round Robin (RR)}, que encaminha ciclicamente
+($1,2,3,1,2,3,\dots$) sem consultar o estado; e \textbf{fila mais curta
+(FC)}, que consulta a ocupação de cada servidor (em execução mais em
+espera) e envia à menor, sorteando entre os empatados. Logs periódicos
+registram a ocupação das filas e quantas requisições cada servidor recebeu,
+permitindo acompanhar a dinâmica da distribuição de carga.
+
+\section{Modelo analítico}
+
+Esta seção desenvolve os itens (a)--(c) para a política aleatória; RR e FC
+são comparadas ao modelo por simulação.
+
+\subsection{(a) Decomposição das chegadas}
+
+Na política aleatória, cada chegada Poisson é marcada, independentemente,
+com o índice do servidor escolhido, cuja probabilidade é $p_i=1/3$. Pelo
+teorema da decomposição (\emph{splitting}), os eventos com cada marca formam
+processos de Poisson mutuamente independentes, com taxas $p_i\lambda$.
+Portanto,
+\begin{equation}
+ \lambda_i=p_i\lambda=\frac{\lambda}{3},\qquad i=1,2,3.
+ \label{eq:splitting}
+\end{equation}
+Logo, cada servidor recebe um Poisson de taxa $\lambda/3$; a independência
+decorre de o destino de uma chegada não alterar o das demais.
+
+\subsection{(b) Filas M/M/1, métricas e estabilidade}
+
+O servidor $i$ recebe chegadas Poisson de taxa $\lambda/3$, atende uma
+requisição por vez com tempo exponencial de taxa $\mu$ e mantém disciplina
+FCFS: essa é exatamente uma fila M/M/1. Seja $N_i$ o número de
+requisições no servidor $i$ (em execução e em espera) no regime estacionário
+e seja $p_k=P[N_i=k]$ a probabilidade de haver exatamente $k$ requisições
+nele, para $k=0,1,2,\dots$. Retomando a distribuição estacionária fornecida,
+\begin{equation}
+ p_k=(1-\rho)\rho^k,\qquad
+ \rho=\frac{\lambda_i}{\mu}=\frac{\lambda}{3\mu}.
+ \label{eq:pk}
+\end{equation}
+Para que essa seja uma distribuição de probabilidade, a série
+$\sum_{k\ge0}p_k$ deve convergir; isso ocorre somente se $\rho<1$. Portanto,
+a condição de estabilidade é $\lambda<3\mu$. Sob essa condição, as métricas
+pedidas seguem diretamente da distribuição em (\ref{eq:pk}). Para o estado
+vazio, (\ref{eq:pk}) dá $p_0=(1-\rho)\rho^0=1-\rho$; logo, a probabilidade
+de o servidor estar ocupado é $U_i=P(N_i>0)=1-p_0=\rho$. Para o número médio de requisições, substituímos (\ref{eq:pk}) na definição
+de esperança e usamos $\sum_{k\ge0}k\rho^k=\rho/(1-\rho)^2$:
+\begin{align}
+ E[N_i]
+ &=\sum_{k\ge0}k\,p_k \\[-1mm]
+ &= (1-\rho)\sum_{k\ge0}k\rho^k \\[-1mm]
+ &= (1-\rho)\frac{\rho}{(1-\rho)^2}
+  =\frac{\rho}{1-\rho}.
+ \label{eq:eni}
+\end{align}
+Para cada servidor $i$, a vazão é limitada simultaneamente pela chegada e pela capacidade
+do servidor: $X_i=\min(\lambda/3,\mu)=\lambda/3$, pois $\lambda<3\mu$. Essa é a taxa de saída
+usada na Lei de Little para o servidor $i$; portanto,
+$E[N_i]=\lambda_iE[R]$. Assim,
+\begin{equation}
+ E[R]=\frac{E[N_i]}{\lambda_i}
+ =\frac{\rho/(1-\rho)}{\lambda_i}
+ =\frac{1}{\mu-\lambda/3}.
+ \label{eq:er}
+\end{equation}
+Como uma resposta é composta pela espera $T_Q$ mais o serviço $S$,
+$R=T_Q+S$. Tomando esperanças e usando $E[S]=1/\mu$,
+\begin{equation}
+ E[T_Q]=E[R]-E[S]
+ =\frac{1}{\mu-\lambda/3}-\frac{1}{\mu}
+ =\frac{\rho}{\mu-\lambda/3}.
+ \label{eq:etq}
+\end{equation}
+Como as filas são independentes e idênticas, $E[N]=3E[N_i]$. A
+Tabela~\ref{tab:analitico} reúne essas previsões para os $\lambda$ do
+experimento.
+
+\begin{table}[!ht]
+\caption{Previsões analíticas da escolha aleatória ($\mu=1$).}
+\label{tab:analitico}
+\centering
+\setlength{\tabcolsep}{2.4pt}
+\footnotesize
+\begin{tabular}{@{}rrrrrrr@{}}
+\toprule
+$\lambda$ & $\rho$ & $U_i$ & $E[N_i]$ & $E[T_Q]$ & $E[R]$ & $X$ \\
+\midrule
+0,6 & 0,2 & 0,2 & 0,250 & 0,250 & 1,250 & 0,6 \\
+1,2 & 0,4 & 0,4 & 0,667 & 0,667 & 1,667 & 1,2 \\
+1,8 & 0,6 & 0,6 & 1,500 & 1,500 & 2,500 & 1,8 \\
+2,4 & 0,8 & 0,8 & 4,000 & 4,000 & 5,000 & 2,4 \\
+2,7 & 0,9 & 0,9 & 9,000 & 9,000 & 10,000 & 2,7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\FloatBarrier
+
+\subsection{(c) Vazão e utilização valem para as três políticas}
+
+O roteamento escolhe \emph{qual} servidor atenderá, mas não altera as
+chegadas nem o trabalho de cada requisição. Em uma janela longa $T$, entram
+em média $\lambda T$ requisições. No regime estável não há acúmulo; como não
+há descartes, partem também $\lambda T$, logo $X=\lambda$ nas três políticas.
+
+Cada requisição consome $E[S]=1/\mu$ unidades de tempo de servidor. Portanto,
+a carga agregada é $\lambda/\mu$, igual à soma das frações de tempo ocupado:
+\begin{equation}
+ U_1+U_2+U_3=\frac{\lambda}{\mu}.
+ \label{eq:utilizacao-agregada}
+\end{equation}
+Os servidores são homogêneos e nenhuma política privilegia índices: A
+sorteia uniformemente, RR mantém contagens que diferem em no máximo uma e FC
+sorteia empates. Logo, $U_1=U_2=U_3$ e
+\begin{equation}
+ U_i=\frac{\lambda}{3\mu}=\rho.
+ \label{eq:utilizacao-conservacao}
+\end{equation}
+Esses argumentos de conservação, que não exigem filas M/M/1, valem para A,
+RR e FC; a Tabela~\ref{tab:simulacao} os confirma.
+
+\section{Arquitetura do simulador}
+
+\subsection{Simulação por eventos discretos}
+
+Na simulação por eventos discretos, o relógio salta ao próximo evento, sem
+passos fixos nem erro de discretização. As três threads são objetos lógicos
+\texttt{Servidor}, não threads do sistema operacional; assim, sincronização
+e escalonamento reais não interferem no modelo.
+
+\subsection{Fila de eventos e tratamento}
+
+Um heap binário ordena os eventos por (instante, tipo, ordem de inserção).
+Há \texttt{CHEGADA}, \texttt{PARTIDA} e \texttt{LOG}, este último apenas
+para amostrar ocupações. Em empates temporais, a partida vem primeiro e
+libera o servidor antes da nova alocação.
+
+Cada servidor mantém uma \texttt{deque} de pares (chegada, serviço). O
+primeiro item está em execução; os demais aguardam em ordem FCFS. Em uma
+\texttt{CHEGADA}$(t)$, o balanceador lê as ocupações, aplica a política e
+insere a requisição no fim da fila. Se ela estava vazia, inicia o serviço e
+agenda a partida para $t+\text{serviço}$. Em uma \texttt{PARTIDA}$(t)$,
+remove o primeiro item e registra $R=t-t_{\mathrm{chegada}}$; se houver
+outro, ele inicia imediatamente e sua partida é agendada. Assim, apenas uma
+requisição é executada por servidor e a ordem FCFS é preservada.
+
+\subsection{Coleta de métricas}
+
+As métricas cobrem $[500,5000]$, uma janela de 4500 u.t.; as primeiras
+500 u.t.\ são aquecimento (\emph{warm-up}) e removem o transiente inicial.
+Antes de cada evento, o simulador integra o estado vigente: se $N(t)=n$ por
+$\Delta t$, soma $n\Delta t$ à área de $N$; se o servidor $i$ está ocupado,
+soma $\Delta t$ ao seu tempo ocupado. Assim,
+$E[N]=\int_{500}^{5000}N(t)\,dt/4500$ e
+$U_i=\text{tempo ocupado}_i/4500$. Por fim,
+$X=\text{partidas}/4500$, e $E[R]$ é a média das respostas das requisições
+que partem na janela.
+
+\subsection{Reprodutibilidade e validação}
+
+Geradores separados produzem chegadas, serviços e decisões de política. O
+serviço é sorteado na chegada; assim, numa réplica, as políticas recebem os
+mesmos instantes e demandas, mudando apenas o roteamento. Esses números
+aleatórios comuns tornam a comparação pareada e reduzem sua variância.
+Testes automatizados verificam RR, empates da FC, conservação,
+reprodutibilidade, $E[R]\to E[S]$ em carga baixa, Lei de Little e os regimes
+estável e instável. Instruções de execução estão no README.
+
+\section{Desenho experimental}
+
+As 15 configurações (5 valores de $\lambda$ $\times$ 3 políticas) tiveram
+10 sementes, 5000 u.t.\ de duração e 500 u.t.\ de aquecimento. Para uma
+métrica, $\bar{x}$ é a média e $s$ o desvio-padrão das réplicas. Como há
+apenas 10 amostras e o desvio populacional é desconhecido, usa-se a
+$t$ de Student, que incorpora a incerteza de estimá-lo por $s$. O IC
+bilateral de 95\% é
+\begin{equation}
+ \bar{x}\ \pm\ t_{0{,}975;9}\,\frac{s}{\sqrt{10}},
+ \qquad t_{0{,}975;9}=2{,}262,
+ \label{eq:ic}
+\end{equation}
+onde $t_{0{,}975;9}=2{,}262$ delimita os 95\% centrais da distribuição
+$t_9$. As barras representam a incerteza da média, não a variação
+individual. O cenário $\lambda=3{,}3$ parte vazio, sem aquecimento, e registra
+$N(t)$ para comparação com a aproximação fluida.
+
+\section{Resultados e discussão}
+
+\subsection{Vazão e utilização (item c)}
+
+A Tabela~\ref{tab:simulacao} traz média $\pm$ semiamplitude do IC de todas
+as configurações. A vazão simulada diferiu de $\lambda$ em no máximo
+0,45\%, e a utilização média diferiu de $\rho$ em no máximo 0,66\%; as
+utilizações individuais são equilibradas entre servidores. Isso confirma o
+argumento de conservação da Seção III-C: $X$ e $U_i$ independem da política
+de roteamento.
+
+\begin{table*}[t]
+\caption{Média $\pm$ semiamplitude do IC de 95\% em dez réplicas. A, RR e FC
+denotam Aleatória, Round Robin e Fila Mais Curta; $X E[R]$ é calculado pelo
+produto das médias.}
+\label{tab:simulacao}
+\centering
+\scriptsize
+\renewcommand{\arraystretch}{0.95}
+\setlength{\tabcolsep}{2.2pt}
+\begin{tabular}{@{}rrlllllll@{}}
+\toprule
+\multicolumn{1}{c}{$\lambda$} & \multicolumn{1}{c}{Pol.} &
+\multicolumn{1}{c}{$X$} & \multicolumn{1}{c}{$E[R]$} &
+\multicolumn{1}{c}{$E[N]$} & \multicolumn{1}{c}{$XE[R]$} &
+\multicolumn{1}{c}{$U_1$} & \multicolumn{1}{c}{$U_2$} &
+\multicolumn{1}{c}{$U_3$} \\
+\midrule
+0,6 & A  & $0,598\pm0,006$ & $1,237\pm0,025$ & $0,741\pm0,017$ & $0,741$ & $0,196\pm0,007$ & $0,200\pm0,008$ & $0,200\pm0,007$ \\
+    & RR & $0,598\pm0,006$ & $1,058\pm0,017$ & $0,633\pm0,011$ & $0,633$ & $0,197\pm0,005$ & $0,201\pm0,006$ & $0,198\pm0,005$ \\
+    & FC & $0,598\pm0,006$ & $1,019\pm0,016$ & $0,610\pm0,011$ & $0,610$ & $0,196\pm0,003$ & $0,200\pm0,008$ & $0,200\pm0,006$ \\
+1,2 & A  & $1,205\pm0,012$ & $1,678\pm0,030$ & $2,022\pm0,048$ & $2,023$ & $0,402\pm0,009$ & $0,397\pm0,009$ & $0,405\pm0,008$ \\
+    & RR & $1,205\pm0,012$ & $1,292\pm0,024$ & $1,558\pm0,033$ & $1,558$ & $0,402\pm0,006$ & $0,405\pm0,008$ & $0,397\pm0,005$ \\
+    & FC & $1,205\pm0,012$ & $1,135\pm0,017$ & $1,368\pm0,025$ & $1,368$ & $0,403\pm0,003$ & $0,402\pm0,008$ & $0,399\pm0,007$ \\
+1,8 & A  & $1,801\pm0,014$ & $2,517\pm0,109$ & $4,533\pm0,203$ & $4,533$ & $0,600\pm0,011$ & $0,605\pm0,010$ & $0,588\pm0,010$ \\
+    & RR & $1,801\pm0,014$ & $1,796\pm0,043$ & $3,234\pm0,091$ & $3,235$ & $0,595\pm0,012$ & $0,601\pm0,007$ & $0,596\pm0,009$ \\
+    & FC & $1,801\pm0,015$ & $1,404\pm0,027$ & $2,528\pm0,057$ & $2,529$ & $0,597\pm0,007$ & $0,600\pm0,007$ & $0,595\pm0,008$ \\
+2,4 & A  & $2,408\pm0,011$ & $5,108\pm0,188$ & $12,314\pm0,482$ & $12,302$ & $0,811\pm0,010$ & $0,791\pm0,013$ & $0,809\pm0,010$ \\
+    & RR & $2,409\pm0,011$ & $3,505\pm0,160$ & $8,449\pm0,407$ & $8,443$ & $0,803\pm0,008$ & $0,800\pm0,012$ & $0,807\pm0,011$ \\
+    & FC & $2,409\pm0,012$ & $2,316\pm0,086$ & $5,582\pm0,220$ & $5,580$ & $0,803\pm0,007$ & $0,805\pm0,007$ & $0,803\pm0,007$ \\
+2,7 & A  & $2,691\pm0,024$ & $9,110\pm0,706$ & $24,532\pm2,020$ & $24,517$ & $0,889\pm0,013$ & $0,888\pm0,016$ & $0,908\pm0,011$ \\
+    & RR & $2,691\pm0,023$ & $6,496\pm0,498$ & $17,487\pm1,426$ & $17,480$ & $0,900\pm0,013$ & $0,893\pm0,008$ & $0,892\pm0,014$ \\
+    & FC & $2,691\pm0,023$ & $3,799\pm0,280$ & $10,235\pm0,812$ & $10,222$ & $0,895\pm0,009$ & $0,894\pm0,009$ & $0,896\pm0,010$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Tempo de resposta e políticas (item d)}
+
+A Fig.~\ref{fig:comparacoes} compara o $E[R]$ simulado das três políticas
+com a curva M/M/1 da aleatória, dada por (\ref{eq:er}). Como apenas a
+aleatória satisfaz as hipóteses M/M/1, a curva é uma previsão exata somente
+para essa política; RR e FC são comparadas a ela experimentalmente. Em todas
+as cinco cargas, observou-se
+\begin{equation}
+ E[R]_{\mathrm{FC}}\le E[R]_{\mathrm{RR}}\le E[R]_{\mathrm{A}}
+ \approx\frac{1}{\mu-\lambda/3}.
+ \label{eq:ordem}
+\end{equation}
+A explicação está na forma como cada política distribui as chegadas. No RR,
+cada servidor recebe uma a cada três chegadas globais. O intervalo entre suas
+chegadas é, portanto, a soma de três exponenciais (Erlang-3), menos variável
+que uma exponencial de mesma média; menos rajadas reduzem a espera. A FC usa
+informação adicional: observa a ocupação atual e evita enviar uma requisição
+para uma fila maior enquanto existe uma menor. Por isso, reduz diretamente o
+desequilíbrio entre os servidores e obtém a menor espera.
+
+Os ganhos de RR frente à aleatória, para
+$\lambda=(0{,}6;1{,}2;1{,}8;2{,}4;2{,}7)$, foram
+$(14{,}46;22{,}98;28{,}65;31{,}38;28{,}69)$\%; os de FC,
+$(17{,}68;32{,}36;44{,}22;54{,}66;58{,}30)$\%. O ganho percentual de uma
+política $p$ é definido por
+$100\,(E[R]_{\mathrm{A}}-E[R]_p)/E[R]_{\mathrm{A}}$. Quanto maior a carga,
+mais caro é enviar uma requisição a um servidor ocupado enquanto outro está
+mais livre -- o erro que a FC evita; o RR ganha menos porque apenas
+regulariza as chegadas, sem consultar o estado.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{er_vs_lambda.pdf}
+\caption{Tempo médio de resposta $E[R]$ em função de $\lambda$. A curva
+tracejada é a previsão M/M/1 da política aleatória; os pontos são médias de
+dez réplicas e as barras, ICs de 95\%.}
+\label{fig:comparacoes}
+\end{figure}
+
+A política aleatória aderiu ao modelo: até $\lambda=2{,}4$, o desvio do
+$E[R]$ foi de no máximo 2,16\%, e o IC contém a curva em todos os quatro
+pontos. Em $\lambda=2{,}7$, o valor simulado foi $9{,}110\pm0{,}706$ e o IC
+$[8{,}40;9{,}82]$ não contém a previsão 10 (desvio de $-8{,}9$\%). 
+
+O desvio observado em $\lambda=2{,}7$ pode ser explicado pela condição inicial da simulação, que começa com as filas vazias. Para $\rho=0{,}9$, cada servidor teria em regime estacionário $E[N_i]=9$ requisições em média, de modo que o sistema parte de um estado muito abaixo do equilíbrio. Como a carga está próxima da saturação, as filas apresentam flutuações maiores e a influência do estado inicial demora mais para desaparecer. Assim, o período de aquecimento de 500 u.t. pode não ser suficiente para eliminar completamente esse efeito, fazendo com que parte da janela de medição ainda apresente filas menores que as esperadas e, consequentemente, valores de $E[N]$ e $E[R]$ ligeiramente abaixo do analítico. Para cargas menores, o nível estacionário é mais próximo de zero e esse viés é muito menos significativo.
+
+\subsection{Lei de Little (item e)}
+
+A Lei de Little, $E[N]=X\,E[R]$, vale para qualquer sistema estável. Ela é
+verificada com estimadores independentes: $E[N]$ vem da integral temporal de
+$N(t)$; $X$, da contagem de partidas; e $E[R]$, dos tempos individuais de
+resposta. A Tabela~\ref{tab:simulacao} apresenta os dois lados da igualdade
+para todas as configurações. As colunas $E[N]$ e $X E[R]$ são praticamente
+idênticas, com erro relativo máximo de 0,13\%. Essa concordância confirma a
+Lei de Little e também valida a integração temporal de $N(t)$ e a delimitação
+da janela de medição.
+
+\subsection{Regime instável (item f)}
+
+Para $\lambda=3{,}3>3\mu=3$, a chegada excede a capacidade agregada; não há
+regime estacionário e $E[N]$, $E[T_Q]$ e $E[R]$ crescem sem limite. Por isso,
+as fórmulas estacionárias da Seção~III-B não se aplicam. Depois que os três
+servidores ficam ocupados, o sistema recebe a taxa $\lambda$ e escoa no
+máximo $3\mu$; a aproximação fluida é, portanto,
+\begin{equation}
+ N(t)\approx N(0)+(\lambda-3\mu)t=N(0)+0{,}3t.
+ \label{eq:fluida}
+\end{equation}
+Na simulação, as vazões de A, RR e FC foram 3,001, 3,004 e 3,007 req./u.t.:
+a saída satura na capacidade, não na chegada. Ao fim de 5000 u.t., $N(t)$
+somou 1656, 1643 e 1630 requisições, contra 1500 previstos pela reta fluida;
+as inclinações ajustadas, entre 0,326 e 0,331, ficaram próximas de 0,3
+(Fig.~\ref{fig:instavel}). As três curvas quase se sobrepõem: com todos os
+servidores permanentemente ocupados, o roteamento torna-se irrelevante.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{instavel_Nt.pdf}
+\caption{Número de requisições no sistema, $N(t)$, no regime instável
+$\lambda=3{,}3$, com a aproximação fluida $(\lambda-3\mu)t$ para
+comparação.}
+\label{fig:instavel}
+\end{figure}
+
+\section{Conclusão}
+
+O simulador de eventos discretos do balanceador foi validado de três formas:
+as invariantes de conservação ($X$ e $U_i$ iguais para as três políticas,
+desvios abaixo de 0,7\%), a adesão da política aleatória ao modelo M/M/1
+(erro máximo de 2,2\% até $\lambda=2{,}4$; o desvio em $\rho=0{,}9$ é o
+transiente de horizonte finito) e a Lei de Little (erro máximo de 0,13\%). Entre as políticas, a fila mais curta é a
+melhor em todas as cargas -- até 58,3\% de redução no tempo médio de
+resposta -- por usar a ocupação instantânea, enquanto o RR melhora apenas
+regularizando as chegadas. Já o cenário
+$\lambda=3{,}3>3\mu$ mostrou o limite de qualquer roteamento: a vazão
+satura na capacidade agregada e as filas divergem linearmente. Rotear bem
+reduz a espera, mas não substitui capacidade.
+
+\section*{Divisão de trabalho}
+\noindent\textit{Caique Pinheiro Andrade:} implementação do simulador e das
+políticas, e execução da campanha experimental.
+\textit{Luiz Henrique Marques Gonçalves:} derivação analítica, análise dos
+resultados e redação do relatório.
+
+\end{document}
