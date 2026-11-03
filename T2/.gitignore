@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Execuções locais (dados persistidos dos nós e logs de depuração)
+execucao/
+execucao_compose/
+dados/
+logs/
+*.out
+
+# NÃO ignorar resultados/: os dados brutos dos experimentos são entregáveis.
+
+# Artefatos de compilação do relatório LaTeX
+relatorio/*.aux
+relatorio/*.fdb_latexmk
+relatorio/*.fls
+relatorio/*.log
+relatorio/*.out
+relatorio/*.synctex.gz
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
