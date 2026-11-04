@@ -223,7 +223,8 @@ pip install -r requirements.txt
 # iniciar: 5 nós como processos independentes (portas livres sorteadas; Ctrl+C encerra)
 python main.py cluster --n 5 --dir execucao --heartbeat 0.5 --timeout-fd 2 --timeout-rpc 1
 #   imprime a linha "--pares 1=127.0.0.1:PORTA,2=..." usada pelos comandos abaixo
-#   (use --porta-base 9000 para portas fixas: nó i escuta em 9000+i-1)
+#   (use --porta-base 9000 para portas fixas: nó i escuta em 9000+i-1, e
+#    PARES=1=127.0.0.1:9000,2=127.0.0.1:9001,3=127.0.0.1:9002,4=127.0.0.1:9003,5=127.0.0.1:9004)
 
 # usar (em outro terminal; troque PARES pela linha impressa)
 python main.py cliente --pares PARES put cor azul
@@ -249,7 +250,9 @@ python main.py verificar --logs execucao/logs --dados execucao/dados --vivos 1,2
 # testar (unitários + integração com processos reais; ~40 s)
 python -m pytest tests/ -v
 
-# remover: encerrar o `cluster` com Ctrl+C e apagar os dados da execução
+# remover: Ctrl+C no terminal do `cluster` encerra o orquestrador e todos os nós que ele
+# iniciou; nós iniciados à mão com `main.py no` (ex.: o nó 5 recuperado) são encerrados com
+# `admin --pares PARES matar --no 5`. Depois, apagar os dados da execução:
 rm -rf execucao            # PowerShell: Remove-Item -Recurse -Force execucao
 ```
 
@@ -316,13 +319,17 @@ cluster novo de processos locais (`Popen`, 127.0.0.1, **sem contêineres**; o `c
 Máquina: Intel Core i5-13420H, 12 núcleos lógicos, 15,7 GB de RAM, Windows 11, Python 3.11.9, numpy 2.3.3,
 matplotlib 3.10.6. Parâmetros, sementes, aquecimento e duração de cada experimento: `resultados/metadados.json`.
 
-**Reproduzir** (a partir de `T2/`; `--rapido` = 2 réplicas e janelas curtas, ~7 min; `--so E1,E3` roda um subconjunto;
-`--regerar` refaz agregados e gráficos a partir de `resultados/brutos/`, sem medir):
+**Reproduzir** (a partir de `T2/`; `--so E1,E3` roda um subconjunto; `--regerar` refaz agregados e gráficos a
+partir de `<saida>/brutos/`, sem medir):
 
 ```
-pip install -r requirements.txt
-python main.py experimentos --saida resultados
+pip install -r requirements.txt                 # pytest, numpy e matplotlib
+python main.py experimentos --rapido            # smoke test: 2 réplicas, ~5–7 min, grava em resultados_rapido/
+python main.py experimentos                     # campanha completa: 10 réplicas, ~38 min, SOBRESCREVE resultados/
 ```
+
+O modo rápido grava por padrão em `resultados_rapido/` (ignorado pelo git) para não sobrescrever os dados
+versionados da campanha completa; `--saida DIR` escolhe outro diretório.
 
 Código: `src/experimentos.py`, `src/estatistica.py`, `src/graficos.py`. Saídas: `resultados/brutos/*.csv` (uma linha por
 réplica; `e2_latencias.csv` tem cada escrita), `resultados/e*_agregado.csv` (média, desvio, IC95 t de Student, mín, p50/p95/p99,

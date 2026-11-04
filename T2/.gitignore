@@ -9,6 +9,7 @@ venv/
 # Execuções locais (dados persistidos dos nós e logs de depuração)
 execucao/
 execucao_compose/
+resultados_rapido/
 dados/
 logs/
 *.out

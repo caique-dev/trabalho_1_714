@@ -103,7 +103,8 @@ def cmd_cluster(args):
         print(f"Cluster com {args.n} nós em {c.diretorio}")
         pares = ",".join(f"{i}={h}:{p}" for i, (h, p) in sorted(c.enderecos.items()))
         print(f"--pares {pares}")
-        print(f"Líder eleito: nó {lider}. Logs em {c.dir_logs}; Ctrl+C encerra.")
+        # flush: a linha --pares precisa aparecer mesmo com a saída redirecionada.
+        print(f"Líder eleito: nó {lider}. Logs em {c.dir_logs}; Ctrl+C encerra.", flush=True)
         while True:
             time.sleep(1.0)
     except KeyboardInterrupt:
@@ -172,6 +173,10 @@ def cmd_verificar(args):
 def cmd_experimentos(args):
     from src import experimentos
     so = args.so.split(",") if args.so else None
+    # O modo rápido grava à parte por padrão: os resultados versionados da
+    # campanha completa (entregáveis) não devem ser sobrescritos por um smoke test.
+    if args.saida is None:
+        args.saida = "resultados_rapido" if args.rapido else "resultados"
     if args.regerar:
         experimentos.agregar_e_plotar(args.saida)
         return 0
@@ -257,7 +262,8 @@ def construir_parser():
     p = sub.add_parser("experimentos", help="campanha experimental (fase 2)")
     p.add_argument("--rapido", action="store_true", help="poucas réplicas e janelas curtas (smoke test)")
     p.add_argument("--so", help="subconjunto, ex.: E1,E3 (E1, E2, E3 = E3a+E3b, E4; padrão: todos)")
-    p.add_argument("--saida", default="resultados", help="diretório de saída (padrão: resultados)")
+    p.add_argument("--saida", default=None,
+                   help="diretório de saída (padrão: resultados; com --rapido: resultados_rapido)")
     p.add_argument("--replicas", type=int, help="réplicas por configuração (padrão: 10; --rapido: 2)")
     p.add_argument("--regerar", action="store_true",
                    help="só refaz agregados e gráficos a partir de <saida>/brutos (não mede nada)")

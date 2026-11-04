@@ -1,5 +1,5 @@
 # Os nós (src/ e main.py) usam SOMENTE a biblioteca padrão do Python 3.11+.
-# As dependências abaixo servem aos testes e (fase 2) à campanha experimental.
+# As dependências abaixo servem aos testes, à campanha experimental e aos gráficos.
 pytest>=7.0
-# numpy>=1.24        # campanha experimental (fase 2)
-# matplotlib>=3.5    # gráficos (fase 2)
+numpy>=1.24        # campanha experimental
+matplotlib>=3.5    # gráficos
