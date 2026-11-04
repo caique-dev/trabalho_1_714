@@ -1,0 +1,66 @@
+# Cluster de 5 nós (Compose v2). O nome do serviço é o host do nó na rede do
+# compose (no1 ... no5); todos escutam na porta 9000 *dentro* da rede e cada um
+# é publicado em 127.0.0.1:900X no host, para clientes/admin/verificador
+# rodando fora dos contêineres.
+#
+# A única diferença para a execução com processos locais é a configuração:
+# o mesmo código lê NO_ID, PARES, NO_HOST, DIR_DADOS, DIR_LOGS e as
+# temporizações das variáveis de ambiente.
+#
+#   docker compose build
+#   docker compose up -d
+#   docker compose kill no5        # crash do nó 5 (SIGKILL)
+#   docker compose start no5       # recuperação (reutiliza o volume de dados)
+#   docker compose down -v         # remove contêineres, rede e volumes de dados
+
+name: mc714-t2
+
+x-no: &no
+  build: .
+  image: mc714-t2-no
+  restart: "no"          # crash só quando pedimos; quem reinicia somos nós
+  stop_grace_period: 2s
+  environment: &ambiente
+    PARES: "1=no1:9000,2=no2:9000,3=no3:9000,4=no4:9000,5=no5:9000"
+    NO_HOST: "0.0.0.0"
+    DIR_DADOS: /dados
+    DIR_LOGS: /logs
+    HEARTBEAT: "0.5"     # intervalo do heartbeat (s)
+    TIMEOUT_FD: "2.0"    # silêncio que gera suspeita (s)
+    TIMEOUT_RPC: "1.0"   # prazo de cada chamada (s)
+    SEMENTE: "0"         # semente da injeção de falhas
+    # QUORUM: "3"        # padrão: maioria de N
+
+services:
+  no1:
+    <<: *no
+    environment: { <<: *ambiente, NO_ID: "1" }
+    ports: ["127.0.0.1:9001:9000"]
+    volumes: ["dados1:/dados", "./execucao_compose/logs:/logs"]
+  no2:
+    <<: *no
+    environment: { <<: *ambiente, NO_ID: "2" }
+    ports: ["127.0.0.1:9002:9000"]
+    volumes: ["dados2:/dados", "./execucao_compose/logs:/logs"]
+  no3:
+    <<: *no
+    environment: { <<: *ambiente, NO_ID: "3" }
+    ports: ["127.0.0.1:9003:9000"]
+    volumes: ["dados3:/dados", "./execucao_compose/logs:/logs"]
+  no4:
+    <<: *no
+    environment: { <<: *ambiente, NO_ID: "4" }
+    ports: ["127.0.0.1:9004:9000"]
+    volumes: ["dados4:/dados", "./execucao_compose/logs:/logs"]
+  no5:
+    <<: *no
+    environment: { <<: *ambiente, NO_ID: "5" }
+    ports: ["127.0.0.1:9005:9000"]
+    volumes: ["dados5:/dados", "./execucao_compose/logs:/logs"]
+
+volumes:
+  dados1:
+  dados2:
+  dados3:
+  dados4:
+  dados5:
