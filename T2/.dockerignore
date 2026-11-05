@@ -1,0 +1,22 @@
+# Fora do contexto de build: só main.py, src/, tests/ e requirements.txt entram na imagem.
+.git
+.gitignore
+.dockerignore
+.venv
+venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.vscode
+.idea
+
+# Saídas geradas e entregáveis (montadas por bind mount quando necessário)
+execucao*
+resultados*
+relatorio
+relatorio_*.pdf
+experimentos
+*.pdf
+*.out
+dados
+logs

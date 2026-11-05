@@ -11,13 +11,20 @@
 #   docker compose up -d
 #   docker compose kill no5        # crash do nó 5 (SIGKILL)
 #   docker compose start no5       # recuperação (reutiliza o volume de dados)
-#   docker compose down -v         # remove contêineres, rede e volumes de dados
+#   docker compose run --rm testes                      # pytest dentro do contêiner
+#   docker compose run --rm experimentos --rapido       # campanha reduzida -> ./resultados_rapido
+#   docker compose run --rm experimentos                # campanha completa -> ./resultados
+#   docker compose down -v --rmi local   # remove contêineres, rede, volumes e a imagem
+#
+# `testes` e `experimentos` têm `profiles`: `docker compose up -d` sobe só os 5 nós.
+# Dentro deles os nós são processos independentes (python main.py no ...) que só
+# se comunicam por TCP em 127.0.0.1 do próprio contêiner (src/cluster.py).
 
 name: mc714-t2
 
 x-no: &no
   build: .
-  image: mc714-t2-no
+  image: mc714-t2
   restart: "no"          # crash só quando pedimos; quem reinicia somos nós
   stop_grace_period: 2s
   environment: &ambiente
@@ -57,6 +64,27 @@ services:
     environment: { <<: *ambiente, NO_ID: "5" }
     ports: ["127.0.0.1:9005:9000"]
     volumes: ["dados5:/dados", "./execucao_compose/logs:/logs"]
+
+  # Testes (pytest) dentro do contêiner. Argumentos extras substituem o comando
+  # padrão: docker compose run --rm testes tests/test_unitarios.py -q
+  testes:
+    build: .
+    image: mc714-t2
+    profiles: ["testes"]
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["tests/", "-q"]
+
+  # Campanha experimental dentro do contêiner; os argumentos vão para
+  # `python main.py experimentos` (--rapido, --so E4, --replicas 1, ...).
+  # As saídas aparecem no host pelos bind mounts.
+  experimentos:
+    build: .
+    image: mc714-t2
+    profiles: ["experimentos"]
+    entrypoint: ["python", "main.py", "experimentos"]
+    volumes:
+      - ./resultados:/app/resultados
+      - ./resultados_rapido:/app/resultados_rapido
 
 volumes:
   dados1:
