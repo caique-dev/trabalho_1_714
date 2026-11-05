@@ -1,26 +1,28 @@
 {
-  "modo_execucao": "processos locais independentes (python main.py no ...), 127.0.0.1, SEM contêineres/Docker (mesmo código que o compose.yaml)",
+  "modo_execucao": "processos independentes (python main.py no ...) em 127.0.0.1 DENTRO de um contêiner Docker (serviço `experimentos` do compose.yaml; os nós só se comunicam por TCP)",
   "rapido": false,
-  "data_inicio_ultima_execucao": "2026-11-02T21:02:18-03:00",
-  "duracao_ultima_execucao_s": 2265.4,
-  "comando": "python main.py experimentos",
+  "data_inicio_ultima_execucao": "2026-11-04T23:59:42+00:00",
+  "duracao_ultima_execucao_s": 1940.9,
+  "comando": "docker compose run --rm experimentos",
   "hardware": {
     "cpu": "13th Gen Intel(R) Core(TM) i5-13420H",
     "nucleos_logicos": 12,
-    "ram_gb": 15.7,
-    "maquina": "AMD64",
-    "hostname": "LEVERAGE-2168"
+    "cpus_disponiveis": 12,
+    "ram_gb": 7.6,
+    "maquina": "x86_64",
+    "hostname": "c055a1b0cb9d"
   },
-  "so": "Windows 10 (10.0.26200)",
-  "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "so": "Debian GNU/Linux 13 (trixie); kernel Linux 6.18.54.1-microsoft-standard-WSL2 (#1 SMP PREEMPT_DYNAMIC Tue Oct  6 19:13:07 UTC 2026)",
+  "python": "3.11.18 (main, Oct 28 2026, 02:02:50) [GCC 14.2.0]",
   "bibliotecas": {
-    "numpy": "2.3.3",
-    "matplotlib": "3.10.6",
-    "pytest": "8.4.2"
+    "numpy": "2.4.6",
+    "matplotlib": "3.11.2",
+    "pytest": "9.2.0"
   },
   "git": {
-    "commit": "ec2a463b59df2ba8f46579d3b4a20ba07eb80696",
-    "arvore_com_alteracoes": true
+    "commit": null,
+    "arvore_com_alteracoes": null,
+    "observacao": "sem repositório git no ambiente de execução"
   },
   "relogio": "time.perf_counter (campo p dos logs), comparável entre processos",
   "replicas_por_configuracao": 10,
@@ -189,7 +191,7 @@
         11508,
         11509
       ],
-      "duracao_execucao_s": 688.1,
+      "duracao_execucao_s": 452.0,
       "descricao": "crash (Popen.kill) do líder N; variantes: natural, melhor caso (só N-1 detecta), pior caso (só o nó 1 detecta; demais com timeout_fd=30 s)",
       "N": [
         3,
@@ -276,7 +278,7 @@
         20508,
         20509
       ],
-      "duracao_execucao_s": 536.8,
+      "duracao_execucao_s": 523.4,
       "descricao": "um cliente síncrono em laço fechado escreve no primário (PUT, chaves cíclicas); latência = perf_counter no cliente, incluindo redirecionamentos",
       "N": [
         3,
@@ -342,7 +344,7 @@
         30308,
         30309
       ],
-      "duracao_execucao_s": 215.2,
+      "duracao_execucao_s": 187.3,
       "descricao": "N=5; escritor contínuo; crash do primário (nó 5); janela = fim da última escrita OK antes do crash -> fim da primeira OK depois",
       "timeout_fd_s": [
         0.25,
@@ -408,7 +410,7 @@
         40308,
         40309
       ],
-      "duracao_execucao_s": 763.7,
+      "duracao_execucao_s": 729.0,
       "descricao": "N=5, sem crash; perda aleatória (prob_descarte) em todas as mensagens nó-a-nó; escritor leve (1 PUT a cada 50 ms); contagem em janela fixa",
       "perdas": [
         0.0,
@@ -438,7 +440,7 @@
         50008,
         50009
       ],
-      "duracao_execucao_s": 61.7,
+      "duracao_execucao_s": 49.0,
       "descricao": "N=5; nó 5 (primário) isolado dos demais por ~4 s; um cliente tenta escrever nele a cada 50 ms, outro escreve no lado majoritário; depois a partição é curada",
       "particao_s": 4.0,
       "parametros": {
@@ -449,5 +451,6 @@
       "aquecimento": "5 escritas antes da partição",
       "duracao_por_replica": "4.0s de partição + convergência"
     }
-  }
+  },
+  "conteiner": true
 }
