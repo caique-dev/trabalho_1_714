@@ -35,15 +35,17 @@ cada algoritmo, o modelo temporal, os canais, as falhas toleradas e as
 propriedades de segurança e vivacidade. Um commit exige quórum de maioria,
 épocas persistidas e uma fase de sincronização pós-eleição; juntos, eles
 impedem a perda de escritas confirmadas, inclusive sob partição. As
-propriedades são verificadas por 50 testes automatizados e por um verificador
+propriedades são verificadas por 53 testes automatizados e por um verificador
 de invariantes sobre logs estruturados. Em uma campanha de 10 réplicas por
-configuração, sobre processos locais, o Valentão custou exatamente $N$
-mensagens no melhor caso e $N(N-1)$ no pior (igual à teoria, desvio zero),
-enquanto o tempo de eleição ($\approx 0{,}3$~s) não cresceu com $N$; uma
-escrita custou exatamente $2(N-1)$ mensagens; a indisponibilidade após o
-crash do primário foi de $1{,}3$ a $3{,}1$~s conforme o \emph{timeout} do
-detector; e um primário isolado confirmou 0 escritas. Em 310 réplicas de
-falha, houve 0 violações de invariantes e 0 escritas confirmadas perdidas.
+configuração, executada em um contêiner Linux (cada nó, um processo
+independente que só fala por TCP), o Valentão forçado custou exatamente $N$
+mensagens no melhor caso e $N(N-1)$ no pior (igual à teoria, desvio zero);
+na variante natural, o custo ficou entre os dois extremos, e a eleição levou
+apenas ${\approx}1$ a $3$~ms, pois a conexão ao nó morto é recusada na hora.
+Uma escrita custou exatamente $2(N-1)$ mensagens; a indisponibilidade após o
+crash do primário foi de $0{,}29$ a $2{,}17$~s, ditada pelo \emph{timeout} do
+detector; e um primário isolado confirmou 0 escritas. Em 310 réplicas, houve 0
+violações de invariantes e 0 escritas confirmadas perdidas.
 \end{abstract}
 
 \section{Introdução e motivação}
@@ -82,13 +84,16 @@ par (época, posição) usado para ordenar réplicas é análogo ao termo e ao
 
 \textbf{Nós e ambiente.} $N$ nós (padrão $N=5$, ids $1,\dots,N$) executam
 como processos independentes, cada um escutando em uma porta TCP e
-comunicando-se \emph{somente} pela rede da aplicação. O mesmo código roda
-como processos locais ou como contêineres (\texttt{compose.yaml}); a
-diferença é só configuração (lista de pares, diretórios, temporizações). A
-máquina de desenvolvimento (Windows 11) não tem Docker, então todos os
-experimentos foram executados como processos locais; o \texttt{compose.yaml}
-e o \texttt{Dockerfile} são fornecidos para o ambiente de referência, mas
-\emph{não foram executados} por nós.
+comunicando-se \emph{somente} pela rede da aplicação. O mesmo código roda de
+três formas, só com configuração diferente: (i) processos locais no
+hospedeiro (Windows 11); (ii) um contêiner por nó (\texttt{compose.yaml}),
+exercitado como demonstração (crash com \texttt{docker compose kill},
+recuperação com \texttt{start}, partição e verificador); e (iii) dentro de
+um único contêiner (serviços \texttt{testes} e \texttt{experimentos}), com
+cada nó como processo independente em 127.0.0.1, orquestrado por
+\texttt{cluster.py}. \emph{A campanha da Seção~VII rodou inteira em (iii)}, em
+um contêiner Debian 13 do Docker Desktop (WSL2) sobre o Windows 11; o cluster
+de cinco contêineres não foi usado para medidas.
 
 \textbf{Modelo temporal: parcialmente síncrono.} Assumimos que, depois de um
 tempo desconhecido, as mensagens entre nós corretos são entregues em menos
@@ -115,7 +120,8 @@ tem \emph{timeout} explícito (\texttt{asyncio.wait\_for}). A retransmissão
 \textbf{Falhas.} Crash-stop e crash-recovery (um nó reiniciado recarrega
 época, líder reconhecido, \emph{snapshot} e \emph{log} de escritas do
 disco), perda e atraso de mensagens e partições de rede. Falhas bizantinas
-não são toleradas. O crash é produzido por \texttt{Popen.kill()}.
+não são toleradas. O crash é produzido por \texttt{Popen.kill()} (testes e
+campanha) ou \texttt{docker compose kill} (demonstração).
 
 \textbf{Relógios e persistência.} Só relógios monotônicos locais, usados
 para \emph{timeouts}; não há sincronização entre nós. Os \emph{timestamps}
@@ -126,11 +132,9 @@ e um WAL; o \texttt{flush} a cada operação preserva os dados diante de
 reiniciado dispara eleição e só retorna à visão de replicação depois de
 re-sincronizar com o primário.
 
-\textbf{Contêineres não são domínios de falha independentes.} Nós na mesma
-máquina compartilham kernel, disco, relógio e energia. Eles são nós
-\emph{lógicos}: falhas correlacionadas (queda do hospedeiro), latências de
-rede reais e perdas de disco não são exercitadas, e as medidas de tempo
-refletem o escalonador de uma única máquina.
+\textbf{Nós lógicos.} Nós na mesma máquina compartilham kernel, disco, relógio
+e energia: falhas correlacionadas, latências de rede reais e perdas de disco
+não são exercitadas (Seção~VIII).
 
 \section{Arquitetura}
 
@@ -326,21 +330,24 @@ $O(N)$. Esses valores são comparados com os contadores na Seção~VII.
 
 \section{Testes e verificação}
 
-Há 50 testes automatizados (\texttt{pytest}): 40 do sistema (cerca de 40~s) e 10 do módulo de estatística (IC, percentis) usado nos experimentos. Dos 40, 25 são unitários,
-sem rede, para a réplica (ordem, idempotência, lacuna, histórico
-divergente, \emph{snapshot}), a persistência (recuperação, WAL truncado), a
-injeção de falhas (semente, partição, filtro), as mensagens, os contadores e
-o verificador (inclusive a detecção de violações forjadas); e 15 de
-integração, com processos reais em localhost. Estes cobrem: Valentão
-normal ($N=5$, líder~5, um líder por época), morte do líder (eleito o~4),
-retorno do~5 e várias falhas (5, 4, 3); heartbeat (suspeita do líder morto;
-falsa suspeita por partição 1$\leftrightarrow$5 sem crash, registrada e
-revogada); replicação normal (réplicas idênticas, custo $2(N-1)$,
-redirecionamento); backup morto sai da visão; \textbf{primário morto durante
-carga} sem perda de escritas confirmadas; nó recuperado re-sincroniza;
-reinício do cluster inteiro a partir do disco; ausência de quórum não
-confirma; \textbf{fencing} (primário isolado não confirma e, ao curar, renuncia
-e descarta sua escrita); e descarte aleatório de mensagens.
+Há 53 testes automatizados (\texttt{pytest}), que rodam no hospedeiro e no
+contêiner (\texttt{docker compose run --rm testes}, 30 a 45~s em
+cada um): 43 do sistema e 10 do módulo de estatística (IC, percentis). Dos 43, 26 são unitários,
+sem rede: réplica (ordem, idempotência, lacuna, histórico divergente,
+\emph{snapshot}), persistência (recuperação, WAL truncado), injeção de falhas,
+mensagens, contadores, verificador (inclusive violações forjadas) e resumo de
+status, que sinaliza um líder sem quórum; e 17, de integração, com processos
+reais em localhost: Valentão normal ($N=5$, líder~5), morte do líder (eleito
+o~4), retorno do~5 e várias falhas; heartbeat (suspeita do líder morto; falsa
+suspeita por partição sem crash, registrada e revogada); replicação normal
+(réplicas idênticas, custo $2(N-1)$, redirecionamento); backup morto sai da
+visão; \textbf{primário morto durante carga} sem perda de confirmadas; nó
+recuperado re-sincroniza; reinício do cluster inteiro a partir do disco;
+ausência de quórum não confirma; \textbf{fencing} (primário isolado não
+confirma e, ao curar, renuncia e descarta sua escrita; ele segue
+\texttt{pronto}, mas com \texttt{quorum\_ativo} falso no status); descarte
+aleatório de mensagens; e encerramento automático do orquestrador
+\texttt{cluster} quando todos os nós morrem.
 
 Cada nó escreve um log JSONL (\texttt{t}, \texttt{p}=\texttt{perf\_counter}
 para intervalos, nó, incarnação, evento). O verificador
@@ -359,12 +366,13 @@ partição.
 
 \textbf{Protocolo.} A campanha é automatizada (\texttt{python main.py
 experimentos}, código em \texttt{src/experimentos.py}). Cada réplica é um
-cluster novo de processos locais; cada configuração tem $n=10$ réplicas
+cluster novo de processos independentes em 127.0.0.1, dentro do contêiner
+\texttt{experimentos}; cada configuração tem $n=10$ réplicas
 independentes, com sementes registradas em \texttt{metadados.json}
 (\texttt{exp$\cdot$10000+config$\cdot$100+réplica}, que também semeiam a injeção
 de falhas) e dados brutos em \texttt{resultados/brutos/}. Reportamos a média
 com desvio-padrão $s$ e IC bilateral de 95\% pela $t$ de Student com $n-1=9$
-graus de liberdade (a variância populacional é desconhecida e $n$ é pequeno):
+graus de liberdade:
 \begin{equation}
  \bar{x}\ \pm\ t_{0{,}975;9}\,\frac{s}{\sqrt{n}},\qquad t_{0{,}975;9}=2{,}262.
  \label{eq:ic}
@@ -373,9 +381,7 @@ Nas latências, p50/p95/p99 são calculados por réplica e a tabela traz a
 média (e o IC) entre réplicas. Toda réplica termina com o verificador (I1--I6)
 e, nas de falha, com a checagem do lado do cliente de que toda escrita
 confirmada está em todas as réplicas vivas. Intervalos usam
-\texttt{perf\_counter} (campo \texttt{p} dos logs). Como timers do Windows têm
-tique de 15,6~ms, que distorcia o atraso injetado e os \emph{timeouts}
-curtos, o processo do nó chama \texttt{timeBeginPeriod(1)}. A fase do crash
+\texttt{perf\_counter} (campo \texttt{p} dos logs). A fase do crash
 em relação ao \emph{heartbeat} é sorteada por réplica. Metadados:
 Tabela~\ref{tab:meta}.
 
@@ -387,15 +393,15 @@ Tabela~\ref{tab:meta}.
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}lp{0.68\columnwidth}@{}}
 \toprule
-Hardware & Intel Core i5-13420H, 12 núcleos lógicos, 15,7~GB RAM \\
-SO / software & Windows 11 (10.0.26200), Python 3.11.9, numpy 2.3.3, matplotlib 3.10.6, pytest 8.4.2 \\
-Execução & processos locais em 127.0.0.1, sem contêineres; 37,8~min no total; 10 réplicas/config. \\
+Hardware & Intel Core i5-13420H, 12 núcleos lógicos; 7,6~GB de RAM visíveis ao contêiner \\
+SO / software & Contêiner Debian 13, kernel Linux 6.18.54.1-microsoft-standard-WSL2 (Docker Desktop sobre Windows 11); Python 3.11.18, numpy 2.4.6, matplotlib 3.11.2, pytest 9.2.0 \\
+Execução & \texttt{docker compose run --rm experimentos}; nós = processos em 127.0.0.1 no contêiner; 32,3~min no total; 10 réplicas/config. \\
 Padrão & $\tau_{hb}=0{,}1$~s, $\tau_{fd}=0{,}5$~s, $\tau_{rpc}=0{,}3$~s (salvo se variado) \\
-E1 & 1~s de \emph{heartbeats} e 3 escritas antes do crash; ${\approx}1$~s de eleição${}+0{,}5$~s \\
+E1 & 1~s de \emph{heartbeats} e 3 escritas antes do crash; eleição${}+0{,}5$~s \\
 E2 & 1,5~s de aquecimento descartado; 6~s medidos \\
-E3a & 1,5~s de escrita antes do crash; até a eleição${}+1$~s; $\tau_{hb}=\tau_{fd}/5$ \\
+E3a & 1,5~s de escrita antes do crash; $\tau_{hb}=\tau_{fd}/5$ \\
 E3b & 2~s de aquecimento com a perda ativa; 15~s de janela \\
-E4 & 5 escritas antes; 4~s de partição; depois, convergência \\
+E4 & 5 escritas antes; 4~s de partição; convergência \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -435,8 +441,8 @@ confirmações de cada lado e os tempos de reconciliação.
 
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=0.48\textwidth]{e1_mensagens_vs_n.pdf}\hfill
-\includegraphics[width=0.48\textwidth]{e2_latencia_vs_n.pdf}
+\includegraphics[width=0.41\textwidth]{e1_mensagens_vs_n.pdf}\hfill
+\includegraphics[width=0.41\textwidth]{e2_latencia_vs_n.pdf}
 \caption{(a) E1: mensagens da eleição vs.\ $N$ para as quatro variantes e as
 curvas teóricas. (b) E2: latência de escrita (p50/p95/p99) vs.\ $N$.}
 \label{fig:e1e2}
@@ -444,61 +450,55 @@ curvas teóricas. (b) E2: latência de escrita (p50/p95/p99) vs.\ $N$.}
 
 \subsection{E1: tempo e mensagens da eleição}
 
-A Tabela~\ref{tab:e1} mostra que a contagem de mensagens é determinística:
-o desvio-padrão foi zero nas 160 réplicas, e os valores coincidem
-exatamente com (\ref{eq:bully}). A variante \emph{natural} coincide com o
-\emph{pior caso}: com detecção por \emph{timeout} o nó 1 também detecta e a
-cascata de \texttt{OK} faz todos os $N-1$ vivos abrirem eleição. Portanto, o
-comportamento típico do Valentão aqui já é quadrático (Fig.~\ref{fig:e1e2}a).
+Nas variantes forçadas (120 réplicas), a contagem de mensagens é
+determinística (Tabela~\ref{tab:e1}): desvio zero e valores iguais a
+(\ref{eq:bully}). A variante \emph{natural} deixou de coincidir com o pior
+caso: em Linux, a conexão ao nó morto é recusada na hora, e a eleição do
+primeiro seguidor que detecta termina em poucos milissegundos, antes que os
+demais detectem. O custo depende de quem detecta primeiro (o menor iniciador
+$m$): a cascata de \texttt{OK} leva os ids $m,\dots,N-1$ a abrir eleição. Em 37
+das 40 réplicas naturais, o total é (\ref{eq:bully}) com
+$m=N-n_{\text{iniciadores}}$; nas outras 3, uma rodada extra somou 3
+mensagens, e uma delas (45, com $N=7$) excedeu $N(N-1)=42$: esse pior caso
+vale para uma rodada por iniciador, não é um limite absoluto. Mais de um nó
+detectou o crash em 12 das 40 réplicas. O custo típico ficou entre os extremos
+(Fig.~\ref{fig:e1e2}a), com grande dispersão e crescente em $N$ (mediana 6;
+10,5; 18,5 e 44).
 
 \begin{table}[!ht]
-\caption{E1: mensagens enviadas na eleição (desvio zero; iguais à teoria). Teoria: $N$, $(N-m)^2+N-1$ com $m=\lceil N/2\rceil$ e $N(N-1)$.}
+\caption{E1: mensagens enviadas na eleição. Variantes forçadas: desvio zero, iguais à teoria ($N$; $(N-m)^2+N-1$ com $m=\lceil N/2\rceil$; $N(N-1)$). Natural: média $\pm$ IC95\% (mín--máx) de 10 réplicas.}
 \label{tab:e1}
 \centering
 \footnotesize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}rrrrr@{}}
+\begin{tabular}{@{}rrrrl@{}}
 \toprule
 $N$ & Melhor & Médio & Pior & Natural \\
 \midrule
-3 & 3 & 3 & 6 & 6 \\
-5 & 5 & 8 & 20 & 20 \\
-7 & 7 & 15 & 42 & 42 \\
-9 & 9 & 24 & 72 & 72 \\
+3 & 3 & 3 & 6 & $5{,}4\pm0{,}9$ (3--6) \\
+5 & 5 & 8 & 20 & $11{,}4\pm4{,}8$ (5--20) \\
+7 & 7 & 15 & 42 & $23{,}2\pm9{,}0$ (7--45) \\
+9 & 9 & 24 & 72 & $40{,}9\pm17{,}5$ (12--72) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{table}[!ht]
-\caption{E1 (\emph{natural}): tempos em s, média $\pm$ IC95\%.}
-\label{tab:e1t}
-\centering
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}rllll@{}}
-\toprule
-$N$ & Detecção & Eleição & Sincr. & \emph{Kill}$\to$pronto \\
-\midrule
-3 & $0{,}510\pm0{,}024$ & $0{,}303\pm0{,}004$ & $0{,}301\pm0{,}006$ & $1{,}113\pm0{,}025$ \\
-5 & $0{,}482\pm0{,}025$ & $0{,}317\pm0{,}013$ & $0{,}304\pm0{,}008$ & $1{,}104\pm0{,}033$ \\
-7 & $0{,}470\pm0{,}030$ & $0{,}314\pm0{,}005$ & $0{,}301\pm0{,}007$ & $1{,}085\pm0{,}034$ \\
-9 & $0{,}476\pm0{,}020$ & $0{,}311\pm0{,}008$ & $0{,}311\pm0{,}010$ & $1{,}098\pm0{,}024$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Nenhuma fase do tempo cresce com $N$. A detecção ($\approx0{,}47$--$0{,}51$~s)
-é $\tau_{fd}$ menos a fase do último \emph{heartbeat}. Eleição e sincronização
-duram $\approx\tau_{rpc}=0{,}3$~s, pois as mensagens de uma rodada vão em
-paralelo e a rodada só termina quando a chamada ao nó morto estoura o
-\emph{timeout}; no Windows, conectar a uma porta fechada leva ${\sim}2$~s (medido),
-então só o \emph{timeout} encerra a chamada. O custo $O(N^2)$ aparece em
-mensagens, não em latência, em localhost.
+A detecção (média de 0,45 a 0,47~s por $N$, com $\tau_{fd}=0{,}5$~s) é
+$\tau_{fd}$ menos a fase do último \emph{heartbeat} e responde por mais de
+97\% do tempo \emph{kill}$\to$pronto (0,457 a 0,480~s, IC95\% de $\pm0{,}015$ a
+$\pm0{,}042$). Na variante natural, a eleição dura 1,4 a 3,0~ms e a
+sincronização, 2,3 a 7,4~ms, ambas crescentes com $N$; no pior caso forçado, a
+eleição vai de 1,8 ($N=3$) a 5,0~ms ($N=9$), e no melhor, de 0,6 a 0,9~ms.
+O custo $O(N^2)$ aparece em mensagens, não em latência, porque a chamada ao
+nó morto retorna de imediato (conexão recusada) e não só no $\tau_{rpc}$. Se o
+nó caído apenas se calasse (desligado ou inalcançável), esperamos, sem tê-lo
+medido ($\tau_{rpc}$ fixo em 0,3~s), que cada rodada durasse até $\tau_{rpc}$ e
+os demais detectassem dentro dela, aproximando a variante natural do pior caso.
 
 \subsection{E2: latência e vazão da escrita}
 
 \begin{table}[!ht]
-\caption{E2: latência (ms), vazão (ops/s) e mensagens por escrita; média $\pm$ IC95\% das 10 réplicas.}
+\caption{E2: vazão (ops/s), latência no cliente (ms) e mensagens por escrita; média $\pm$ IC95\% das 10 réplicas.}
 \label{tab:e2}
 \centering
 \scriptsize
@@ -507,33 +507,35 @@ mensagens, não em latência, em localhost.
 \toprule
 Config. & Vazão & p50 & p95 & p99 & Msg./esc. \\
 \midrule
-$N{=}3$, 0 ms & $50{,}2\pm3{,}1$ & $17{,}7\pm4{,}1$ & $37{,}0\pm0{,}5$ & $40{,}6\pm1{,}1$ & 4 \\
-$N{=}5$, 0 ms & $37{,}8\pm3{,}1$ & $25{,}0\pm4{,}3$ & $45{,}4\pm1{,}7$ & $50{,}1\pm1{,}9$ & 8 \\
-$N{=}7$, 0 ms & $32{,}3\pm2{,}3$ & $28{,}6\pm4{,}0$ & $55{,}9\pm1{,}8$ & $63{,}1\pm2{,}2$ & 12 \\
-$N{=}9$, 0 ms & $26{,}2\pm1{,}6$ & $34{,}2\pm3{,}6$ & $69{,}5\pm1{,}8$ & $75{,}6\pm2{,}0$ & 16 \\
-$N{=}5$, 5 ms & $27{,}7\pm0{,}9$ & $35{,}0\pm2{,}1$ & $55{,}7\pm1{,}9$ & $61{,}8\pm1{,}3$ & 8 \\
-$N{=}5$, 20 ms & $14{,}1\pm0{,}3$ & $71{,}8\pm2{,}1$ & $88{,}8\pm1{,}8$ & $93{,}2\pm2{,}6$ & 8 \\
+$N{=}3$, 0 ms & $501\pm56$ & $1{,}96\pm0{,}27$ & $2{,}77\pm0{,}48$ & $3{,}38\pm0{,}56$ & 4 \\
+$N{=}5$, 0 ms & $294\pm22$ & $3{,}30\pm0{,}24$ & $4{,}46\pm0{,}43$ & $5{,}58\pm0{,}62$ & 8 \\
+$N{=}7$, 0 ms & $226\pm11$ & $4{,}23\pm0{,}22$ & $6{,}05\pm0{,}38$ & $7{,}70\pm0{,}53$ & 12 \\
+$N{=}9$, 0 ms & $170\pm19$ & $5{,}62\pm0{,}64$ & $9{,}07\pm1{,}73$ & $12{,}6\pm4{,}5$ & 16 \\
+$N{=}5$, 5 ms & $72{,}6\pm2{,}0$ & $13{,}7\pm0{,}4$ & $15{,}3\pm0{,}6$ & $16{,}1\pm0{,}7$ & 8 \\
+$N{=}5$, 20 ms & $22{,}6\pm0{,}2$ & $44{,}1\pm0{,}4$ & $45{,}8\pm0{,}6$ & $46{,}5\pm0{,}9$ & 8 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Mensagens por escrita foram \emph{exatamente} $2(N-1)$, com desvio zero nas 60
-réplicas. A latência cresce com $N$ (p50 de 17,7 para 34,2~ms de $N=3$ a 9),
-porque o primário abre $N-1$ conexões e trata $N-1$ \texttt{ACK} no mesmo laço
-de eventos, e com o atraso injetado: a cada escrita ele soma $\approx2\times$ o
-atraso nominal (ida do \texttt{REPLICAR} e volta do \texttt{ACK}, com os
-backups em paralelo). A vazão cai na mesma proporção, pois há um cliente
-síncrono e o primário serializa as escritas. A latência absoluta é alta
-($\ge17$~ms) porque cada mensagem abre uma conexão TCP, o que no Windows é caro;
-vale a tendência, e os valores absolutos não se transferem a Linux ou a
-contêineres.
+réplicas. A latência cresce com $N$ (p50 de 1,96 a 5,62~ms de $N=3$ a 9; vazão
+de 501 a 170 ops/s), porque o primário abre $N-1$ conexões e trata $N-1$
+\texttt{ACK} no mesmo laço de eventos: o p50 medido no próprio primário sobe de
+1,2 a 4,4~ms, ${\approx}0{,}5$~ms por backup, e a dispersão também (IC95\% do
+p99: $\pm0{,}56$ e $\pm4{,}5$~ms). Com atraso
+injetado, a escrita soma $\approx2\times$ o atraso nominal (ida do
+\texttt{REPLICAR} e volta do \texttt{ACK}, backups em paralelo): o p50 no
+primário ($N=5$) vai de 2,33~ms a 12,78 e 43,2~ms com 5 e 20~ms nominais
+($+10{,}4$ e $+40{,}9$~ms), e a vazão cai na mesma proporção (um cliente
+síncrono; escritas serializadas). Os valores absolutos valem para
+\emph{loopback}; para redes reais, vale a tendência.
 
 \subsection{E3: \emph{failover} e falsas suspeitas}
 
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=0.49\textwidth]{e3a_janela_vs_timeout.pdf}\hfill
-\includegraphics[width=0.49\textwidth]{e3b_falsas_suspeitas_vs_perda.pdf}
+\includegraphics[width=0.495\textwidth]{e3a_janela_vs_timeout.pdf}\hfill
+\includegraphics[width=0.495\textwidth]{e3b_falsas_suspeitas_vs_perda.pdf}
 \caption{(a) E3a: janela de indisponibilidade e decomposição vs.\
 $\tau_{fd}$. (b) E3b: suspeitas falsas vs.\ perda de mensagens.}
 \label{fig:e3}
@@ -549,83 +551,64 @@ $\tau_{fd}$. (b) E3b: suspeitas falsas vs.\ perda de mensagens.}
 \toprule
 $\tau_{fd}$ & Detecção & \emph{Kill}$\to$pronto & Janela (média $\pm$ IC) & p50 & p95 \\
 \midrule
-0,25 & 0,255 & 0,859 & $1{,}29\pm0{,}04$ & 1,30 & 1,34 \\
-0,5 & 0,522 & 1,137 & $1{,}36\pm0{,}21$ & 1,18 & 1,79 \\
-1,0 & 1,052 & 1,664 & $1{,}96\pm0{,}18$ & 1,78 & 2,26 \\
-2,0 & 2,189 & 2,803 & $3{,}10\pm0{,}22$ & 2,92 & 3,54 \\
+0,25 & 0,259 & 0,267 & $0{,}292\pm0{,}020$ & 0,281 & 0,335 \\
+0,5 & 0,521 & 0,531 & $0{,}548\pm0{,}012$ & 0,543 & 0,577 \\
+1,0 & 1,036 & 1,042 & $1{,}062\pm0{,}030$ & 1,053 & 1,118 \\
+2,0 & 2,128 & 2,137 & $2{,}166\pm0{,}075$ & 2,168 & 2,307 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-A janela vista pelo cliente é $\approx\tau_{fd}$ mais eleição e sincronização
-(${\approx}2\tau_{rpc}$) mais a retentativa do cliente: a detecção segue
-$\tau_{fd}$, e há um piso fixo de ${\sim}0{,}6$~s de eleição e sincronização
-(esperam o \emph{timeout} do nó morto; $\tau_{rpc}$ não foi variado). A janela
-excede o \emph{kill}$\to$pronto em 0,2 a 0,45~s, pois a tentativa ao primário
-morto só falha após o \emph{timeout} de 0,5~s do cliente. Esse timeout é o
-piso que torna as janelas em $\tau_{fd}=0{,}25$ e $0{,}5$~s quase iguais, e a
-retentativa gera a bimodalidade (p50 abaixo da média em 0,5 e 1~s). Nenhuma
-escrita falhou (o cliente repete) e nenhuma confirmada se perdeu.
+A janela vista pelo cliente é a detecção mais 0,026 a 0,037~s: eleição e
+sincronização somam 6 a 10~ms, e o resto vem da retentativa do cliente (20 a
+50~ms entre tentativas) e da primeira escrita após a eleição. A detecção fica
+de 1,04 a 1,06 vezes $\tau_{fd}$, e a janela, de 1,06 a 1,17: a
+indisponibilidade é, na prática, $\tau_{fd}$. Como a chamada ao primário morto falha de imediato, não
+aparecem pisos de $\tau_{rpc}$ nem do \emph{timeout} de 0,5~s por tentativa do
+cliente; em uma rede que não recusa, esperamos que voltem (hipótese, não
+medida). Nenhuma escrita falhou e nenhuma confirmada se perdeu.
 
 \begin{table}[!ht]
-\caption{E3b: sem crash, $N=5$, janela de 15~s. Suspeitas do detector e eleições espúrias por minuto (média $\pm$ IC95\%).}
+\caption{E3b: sem crash, $N=5$, janela de 15~s. Suspeitas e eleições espúrias por minuto; trocas de líder e escritas por janela (média $\pm$ IC95\%).}
 \label{tab:e3b}
 \centering
 \footnotesize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}rllrr@{}}
+\begin{tabular}{@{}rllrl@{}}
 \toprule
 Perda & Susp./min & Eleições esp./min & Troca de líder & Escritas ok \\
 \midrule
-0 & 0 & 0 & 0 & 188 \\
-0,05 & $5{,}2\pm3{,}3$ & $9{,}2\pm8{,}6$ & 0 & 75 \\
-0,10 & $26{,}0\pm10{,}6$ & $42{,}0\pm15{,}0$ & 0,4 & 47 \\
-0,20 & $72{,}4\pm10{,}0$ & $110\pm14$ & 0,8 & 15 \\
+0 & 0 & 0 & 0 & $277{,}4\pm1{,}9$ \\
+0,05 & $5{,}6\pm4{,}3$ & $7{,}6\pm5{,}9$ & 0 & $95{,}0\pm5{,}7$ \\
+0,10 & $20{,}8\pm3{,}5$ & $36{,}4\pm7{,}3$ & 0,4 & $48{,}1\pm6{,}6$ \\
+0,20 & $75{,}2\pm9{,}6$ & $117\pm25$ & 2,0 & $15{,}4\pm3{,}3$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Sem perda, não houve falsa suspeita. A taxa cresce \emph{mais que
-linearmente} com a perda (Tabela~\ref{tab:e3b}, Fig.~\ref{fig:e3}b): um seguidor só suspeita após
-${\sim}5$ \emph{heartbeats} seguidos sem chegar, e a perda também derruba os
-\texttt{ACK} e as mensagens de eleição, o que realimenta o processo. Quase
-não há troca de líder: o líder, ao receber \texttt{ELEICAO}, responde com
+Sem perda, não houve suspeita falsa nem eleição espúria. A taxa de suspeitas
+cresce \emph{mais que linearmente} com a perda (Tabela~\ref{tab:e3b},
+Fig.~\ref{fig:e3}b): de 5 a 10\% e de 10 a 20\%, multiplica por 3,7 e 3,6. Um
+seguidor só suspeita após ${\sim}5$ \emph{heartbeats} seguidos sem chegar, e a
+perda também derruba \texttt{ACK} e mensagens de eleição, realimentando o
+processo. A troca de líder é rara (0,4 e 2,0 por janela com 10 e 20\%): o líder, ao receber \texttt{ELEICAO}, responde com
 \emph{heartbeat} em vez de reeleger, e as épocas impedem dois primários. O
-efeito visível é na vazão: cada \texttt{REPLICAR} ou \texttt{ACK} perdido
-custa um $\tau_{rpc}$ (0,3~s) e a remoção do backup da visão (reentrada por
-\texttt{ENTRAR}), e o commit exige quórum; assim, as escritas confirmadas
-caem de 188 para 15 em 15~s com 20\% de perda, sem perder nenhuma confirmada.
+efeito visível é na vazão: cada \texttt{REPLICAR} ou \texttt{ACK} perdido custa
+um $\tau_{rpc}$ (0,3~s) e a remoção do backup da visão (reentrada por
+\texttt{ENTRAR}), e o commit exige quórum; as escritas confirmadas caem de
+277,4 para 15,4 em 15~s com 20\% de perda (94\% a menos), sem perder nenhuma
+confirmada.
 
 \subsection{E4: partição do primário}
 
-\begin{table}[!ht]
-\caption{E4: primário (nó 5) isolado por ${\approx}4$~s ($N=5$, 10 réplicas).}
-\label{tab:e4}
-\centering
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}lr@{}}
-\toprule
-Métrica & Média $\pm$ IC95\% \\
-\midrule
-Tentativas de escrita no primário isolado & $55{,}7\pm1{,}4$ \\
-Confirmadas pelo primário isolado (\texttt{sem\_quorum}) & $0\pm0$ \\
-Maioria: nó 4 pronto após o isolamento (s) & $1{,}131\pm0{,}014$ \\
-Confirmadas no lado majoritário (de 20) & $20\pm0$ \\
-Nó 5 renuncia após curar (s) & $0{,}261\pm0{,}064$ \\
-Nó 5 retoma a liderança (s) & $0{,}487\pm0{,}090$ \\
-Convergência total após curar (s) & $0{,}627\pm0{,}098$ \\
-Escritas órfãs no estado final & 0 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-O primário isolado não confirmou nenhuma das ${\sim}56$ tentativas, todas
-respondidas com \texttt{sem\_quorum}; a maioria elegeu o nó 4, que ficou
-pronto em ${\sim}1{,}13$~s e confirmou todas as 20 escritas. Ao curar, o nó 5
-renunciou pela época maior, retomou a liderança (maior id) e tudo convergiu,
-sem escritas órfãs. É o \emph{split-brain} da Seção~IV-A resolvido pelo
-quórum, na prática.
+O primário isolado (nó 5, ${\approx}4$~s) não confirmou nenhuma das
+${\sim}72$ tentativas (71 a 73 por réplica), todas \texttt{sem\_quorum}; a
+maioria elegeu o nó 4, que confirmou as 20 escritas e ficou pronto em
+$1{,}000\pm0{,}158$~s (bimodal: 3 réplicas em ${\approx}0{,}68$~s e 7 entre 1,11
+e 1,16~s; causa não investigada). Ao curar, o nó 5 renunciou pela época maior em
+$0{,}105\pm0{,}051$~s, retomou a liderança (maior id) em $0{,}149\pm0{,}046$~s e
+tudo convergiu em $0{,}157\pm0{,}045$~s (IC95\%, 10 réplicas), sem escritas
+órfãs. É o \emph{split-brain} da Seção~IV-A resolvido pelo quórum, na prática.
 
 \textbf{Correção em todos os experimentos.} Nas 310 réplicas de falha, o
 verificador reportou 0 violações (I1--I6) e a checagem do cliente, 0 escritas
@@ -635,10 +618,13 @@ confirmadas perdidas.
 
 \section{Limitações}
 
-\textbf{Domínios de falha.} Processos ou contêineres numa só máquina não são
-independentes (Seção~II): não há falha correlacionada, latência real de rede
-nem perda de disco, e os tempos refletem um único escalonador; os valores
-absolutos não se transferem a outro hardware. \textbf{Docker.} O \texttt{compose.yaml} não foi executado por nós (Seção~II).
+\textbf{Domínios de falha e ambiente.} Processos ou contêineres numa só máquina
+não são independentes: sem falha correlacionada, latência real de rede nem
+perda de disco, e os tempos de um só escalonador não se transferem a outro
+hardware. A campanha roda os nós como processos de \emph{um} contêiner (o
+orquestrador dos testes cria clusters descartáveis): o crash é a morte de um
+processo e a rede é o \emph{loopback}. Como o nó morto recusa conexões na hora,
+os tempos de eleição subestimam os de uma rede em que ele se cala.
 \textbf{Disponibilidade.} O quórum de maioria sacrifica disponibilidade:
 sem a maioria dos nós vivos, não há escritas nem leituras.
 \textbf{Perda possível.} Uma escrita confirmada se perde se todos os nós que
@@ -656,17 +642,14 @@ Integramos Valentão, primário-backup síncrono e detector por
 \emph{heartbeat} em um armazenamento replicado cuja segurança repousa em três
 peças: quórum de maioria no commit, épocas e líder reconhecido persistidos e
 fase de sincronização pós-eleição. O Valentão pode produzir dois líderes sob
-partição, e o heartbeat pode suspeitar de nós vivos; ambos custam apenas
-vivacidade, pois só o lado majoritário conclui a sincronização e os demais
-são recusados por época. As propriedades são checadas por testes de
-integração e pelo verificador de logs, e a campanha as confirmou: em 310
-réplicas de falha, houve 0 violações e 0 escritas confirmadas perdidas. O
-Valentão custou $N$ mensagens no melhor caso e $N(N-1)$ no pior (também o
-caso natural), sem que o tempo de eleição crescesse com $N$; a escrita custou
-$2(N-1)$ mensagens; a janela de indisponibilidade foi de $1{,}29$ a $3{,}10$~s
-para $\tau_{fd}$ de 0,25 a 2~s; com 20\% de perda, as escritas confirmadas
-caíram de 188 para 15 em 15~s, sem perda de dados; e o primário isolado não
-confirmou nada.
+partição e o heartbeat pode suspeitar de nós vivos; ambos custam só
+vivacidade. Em 310 réplicas, houve 0 violações e 0 escritas confirmadas
+perdidas. O Valentão forçado custou $N$ e $N(N-1)$ mensagens no
+melhor e no pior caso; o natural ficou entre os dois (12 a 72 com $N=9$), com
+eleição de milissegundos; a escrita custou $2(N-1)$; a janela de
+indisponibilidade foi de $0{,}29$ a $2{,}17$~s, quase igual a $\tau_{fd}$; com
+20\% de perda, as escritas confirmadas caíram de 277 para 15 em 15~s, sem
+perda de dados; e o primário isolado não confirmou nada.
 
 \section*{Divisão de trabalho}
 \noindent\textit{Caique Pinheiro Andrade:} implementação dos algoritmos e da

@@ -75,9 +75,10 @@ src/
   verificador.py   verificação de invariantes a partir dos logs
   cliente.py       cliente síncrono com redirecionamento + chamadas administrativas
   cluster.py       orquestrador local de processos (Popen) usado por testes e experimentos
+                   (dentro ou fora de contêiner: os nós são sempre processos independentes)
 tests/             unitários (sem rede) e de integração (processos reais)
-Dockerfile, compose.yaml   o mesmo código como 5 contêineres
-experimentos/ (reservado), resultados/, relatorio/   fases 2 e 3
+Dockerfile, compose.yaml, .dockerignore   o mesmo código como 5 contêineres + serviços `testes` e `experimentos`
+experimentos/README.md (aponta para src/experimentos.py), resultados/, relatorio/
 ```
 
 ### Visão geral do funcionamento
@@ -144,9 +145,24 @@ processo; recuperação = reiniciá-lo com o mesmo diretório de dados.
 ### Status, contadores e eventos (dados para a fase 2)
 
 `ADM_STATUS` (`python main.py admin status`, ou `Cluster.status(i)`) devolve por nó: `papel`,
-`lider`, `epoca`, `pronto`, `visao`, `seq`, `ult_epoca`, `hash` do estado, `n_chaves`, `quorum`,
+`lider`, `epoca`, `pronto`, `quorum_ativo`, `visao`, `seq`, `ult_epoca`, `hash` do estado, `n_chaves`, `quorum`,
 `suspeitas`, `suspeitas_falsas`, `uptime`, parâmetros, estado da injeção de falhas e
 `contadores` (`enviadas`/`recebidas` por tipo, `externas_recebidas`, `descartadas`).
+
+**`pronto` x `quorum_ativo`.** `pronto` significa que o líder concluiu a fase de sincronização da sua
+época (é o que o verificador usa, junto com o evento `lider_pronto`) e **não** muda quando o líder é
+isolado. `quorum_ativo` (novo, só informativo: nenhum protocolo o consulta) diz se **agora** o líder
+enxerga um quórum: `1 + |membros da visão com HB_ACK/ACK há menos de timeout_fd| >= quórum` (a mesma
+verificação de lease que o `GET` usa). É `true`/`false` no líder e `null` nos seguidores. Um primário
+isolado por partição fica `papel=lider, pronto=true, quorum_ativo=false` (em até `timeout_fd` após o
+isolamento) e não confirma escritas nem serve leituras; `admin status` imprime uma linha-resumo com
+esses campos e, nesse caso, um aviso explícito, seguida do JSON completo:
+
+```
+no 5: papel=lider epoca=2 lider=5 pronto=true quorum_ativo=false visao=[] seq=3
+  >>> ATENÇÃO: líder SEM quórum ativo (isolado ou maioria indisponível): não confirma escritas nem serve leituras
+  {"id": 5, "papel": "lider", ...}
+```
 
 Cada nó escreve `logs/no<ID>.jsonl` (e o orquestrador `logs/cluster.jsonl`, com `no_morto` /
 `no_iniciado`). Cada linha: `t` (`time.time()`), `p` (`time.perf_counter()`, alta resolução e
@@ -208,94 +224,199 @@ efetivo). Os estados finais vêm do disco (`--dados`) ou, nos testes, de `ADM_ST
 
 ## Requisitos
 
-- Python 3.11+ (os nós usam apenas a biblioteca padrão); `pytest` para os testes
-  (`pip install -r requirements.txt`).
-- Docker + Compose v2 (opcional) para a execução em contêineres.
+- **Nós, cliente, admin e verificador: só Python 3.11+ e a biblioteca padrão** (nenhum `pip install`).
+  Os comandos `cliente`, `admin`, `verificar` e `cluster` rodam **no host, com o Python do sistema**,
+  mesmo quando os nós estão em contêineres (eles falam com os nós por TCP em `127.0.0.1`).
+- `requirements.txt` — só para testes e experimentos:
+  - `pytest`: suíte de testes (`tests/`);
+  - `numpy`: estatística da campanha experimental (médias, desvios, IC95, percentis);
+  - `matplotlib`: gráficos da campanha.
+
+  Para rodar testes/experimentos **no host**, sugere-se um ambiente virtual:
+
+  ```bash
+  python -m venv .venv
+  source .venv/bin/activate            # PowerShell: .venv\Scripts\Activate.ps1
+  pip install -r requirements.txt
+  ```
+
+  Via Docker (abaixo) nada disso é necessário: a imagem já instala as dependências.
+- Docker + Compose v2 (opcional) para a execução em contêineres, testes e experimentos no contêiner.
 
 ## Como executar
+
+Há duas formas de subir o cluster (A: processos locais; B: Docker Compose). A lista de pares usada
+pelos comandos `cliente`/`admin` muda só nas portas:
+
+| | portas no host | variável de pares |
+|---|---|---|
+| A — `cluster --porta-base 9000` | nó *i* em `9000+i-1` (9000..9004); sem `--porta-base`, portas livres sorteadas e a linha `--pares ...` é impressa | `1=127.0.0.1:9000,...,5=127.0.0.1:9004` |
+| B — Compose | nó *i* em `9000+i` (9001..9005), mapeadas da porta `9000` de cada contêiner | `1=127.0.0.1:9001,...,5=127.0.0.1:9005` |
+
+(No compose todos os contêineres escutam em `9000` *dentro* da rede `mc714-t2_default` e a lista
+interna é `1=no1:9000,...`; o mapeamento `127.0.0.1:900i -> 9000` existe só para o host.)
 
 ### Opção A — processos locais (sem Docker)
 
 ```bash
-# construir: nada a compilar; instalar o pytest
-pip install -r requirements.txt
+# construir: nada a compilar (só biblioteca padrão para os nós)
 
-# iniciar: 5 nós como processos independentes (portas livres sorteadas; Ctrl+C encerra)
-python main.py cluster --n 5 --dir execucao --heartbeat 0.5 --timeout-fd 2 --timeout-rpc 1
-#   imprime a linha "--pares 1=127.0.0.1:PORTA,2=..." usada pelos comandos abaixo
-#   (use --porta-base 9000 para portas fixas: nó i escuta em 9000+i-1, e
-#    PARES=1=127.0.0.1:9000,2=127.0.0.1:9001,3=127.0.0.1:9002,4=127.0.0.1:9003,5=127.0.0.1:9004)
+# iniciar: 5 nós como processos independentes; Ctrl+C encerra (ver "Encerramento" abaixo)
+python main.py cluster --n 5 --dir execucao --porta-base 9000 --heartbeat 0.5 --timeout-fd 2 --timeout-rpc 1
+#   imprime "--pares 1=127.0.0.1:9000,..." e "Líder eleito: nó 5"
+```
 
-# usar (em outro terminal; troque PARES pela linha impressa)
-python main.py cliente --pares PARES put cor azul
-python main.py cliente --pares PARES get cor          # pode começar por qualquer nó (redireciona)
-python main.py admin   --pares PARES status           # líder, época, visão, seq, contadores
-python main.py admin   --pares PARES status --no 3 --dados
+Em outro terminal, defina a variável de pares:
+
+```bash
+# bash
+PARES=1=127.0.0.1:9000,2=127.0.0.1:9001,3=127.0.0.1:9002,4=127.0.0.1:9003,5=127.0.0.1:9004
+```
+```powershell
+# PowerShell
+$PARES = "1=127.0.0.1:9000,2=127.0.0.1:9001,3=127.0.0.1:9002,4=127.0.0.1:9003,5=127.0.0.1:9004"
+```
+
+Os comandos abaixo valem em bash e PowerShell (`$PARES` nos dois):
+
+```bash
+python main.py cliente --pares $PARES put cor azul
+python main.py cliente --pares $PARES get cor          # pode começar por qualquer nó (redireciona)
+python main.py admin   --pares $PARES status           # resumo por nó + JSON (líder, época, visão, seq, contadores)
+python main.py admin   --pares $PARES status --no 3 --dados
 
 # falhas
-python main.py admin --pares PARES matar --no 5                           # crash do nó 5 (kill)
-python main.py admin --pares PARES falhas --no 3 --descarte 0.1 --atraso 0.05 --jitter 0.05 --semente-falhas 7
-python main.py admin --pares PARES falhas --no 5 --bloquear 1 2 3 4       # isola o nó 5
-python main.py admin --pares PARES falhas --no 5 --limpar                 # remove as falhas
+python main.py admin --pares $PARES matar --no 5                           # crash do nó 5 (kill)
+python main.py admin --pares $PARES falhas --no 3 --descarte 0.1 --atraso 0.05 --jitter 0.05 --semente-falhas 7
+python main.py admin --pares $PARES falhas --no 5 --bloquear 1 2 3 4       # isola o nó 5
+python main.py admin --pares $PARES status --no 5                          # papel=lider pronto=true quorum_ativo=false + aviso
+python main.py admin --pares $PARES falhas --no 5 --limpar                 # remove as falhas
 
-# recuperar o nó 5 (mesmo diretório de dados => crash-recovery); linha vem da mensagem de `cluster`
-python main.py no --id 5 --pares PARES --dados execucao/dados --logs execucao/logs \
-       --heartbeat 0.5 --timeout-fd 2 --timeout-rpc 1
+# recuperar o nó 5 (mesmo diretório de dados => crash-recovery)
+python main.py no --id 5 --pares $PARES --dados execucao/dados --logs execucao/logs \
+       --heartbeat 0.5 --timeout-fd 2 --timeout-rpc 1        # PowerShell: use ` no lugar de \
 
 # verificar as invariantes
 python main.py verificar --logs execucao/logs --dados execucao/dados --vivos 1,2,3,4,5
 ```
 
 ```bash
-# testar (unitários + integração com processos reais; ~40 s)
-python -m pytest tests/ -v
-
-# remover: Ctrl+C no terminal do `cluster` encerra o orquestrador e todos os nós que ele
-# iniciou; nós iniciados à mão com `main.py no` (ex.: o nó 5 recuperado) são encerrados com
-# `admin --pares PARES matar --no 5`. Depois, apagar os dados da execução:
-rm -rf execucao            # PowerShell: Remove-Item -Recurse -Force execucao
+# testar no host (unitários + integração com processos reais; ~45 s; precisa do pip install acima)
+python -m pytest tests/ -q
 ```
+
+**Encerramento.** `Ctrl+C` no terminal do `cluster` encerra o orquestrador e todos os nós que ele
+iniciou. O orquestrador também **encerra sozinho** (imprimindo "Todos os nós iniciados por este
+orquestrador terminaram; encerrando.") quando nenhum dos processos que ele iniciou está vivo, por
+exemplo depois de `admin matar` em todos os nós. Nós iniciados à mão com `main.py no` (como o nó 5
+recuperado acima) não contam para isso; encerre-os com `admin --pares $PARES matar --no 5`. Depois,
+apague os dados da execução: `rm -rf execucao` (PowerShell: `Remove-Item -Recurse -Force execucao`).
+
+> `admin matar` envia o sinal ao **pid informado pelo nó**, então só serve para nós da mesma
+> máquina (opção A). Se o nó informa outro hostname (um contêiner), o comando recusa e indica
+> `docker compose kill noN`.
 
 ### Opção B — Docker Compose (v2)
 
-A única diferença é a configuração: o mesmo código lê `NO_ID`, `PARES` (`id=host:porta`, com o
-nome do serviço como host), `NO_HOST`, `DIR_DADOS`, `DIR_LOGS` e as temporizações de variáveis de
-ambiente (ver `compose.yaml`).
+Uma única imagem (`mc714-t2`: `python:3.11-slim` + dependências do `requirements.txt` + `main.py`,
+`src/` e `tests/`) serve a todos os serviços; o `.dockerignore` deixa de fora `.git`, `.venv`,
+`__pycache__`, `execucao*`, `resultados*`, `relatorio*` etc. O mesmo código lê `NO_ID`, `PARES`
+(`id=host:porta`, com o nome do serviço como host), `NO_HOST`, `DIR_DADOS`, `DIR_LOGS` e as
+temporizações de variáveis de ambiente (ver `compose.yaml`). As temporizações da demonstração
+(`HEARTBEAT=0.5`, `TIMEOUT_FD=2.0`, `TIMEOUT_RPC=1.0`) são mais folgadas que as da campanha
+(0,1 / 0,5 / 0,3 s), para que dê tempo de observar cada passo à mão; a campanha define as suas.
 
 ```bash
-# construir
+# construir (uma imagem; a camada de dependências fica em cache enquanto requirements.txt não mudar)
 docker compose build
 
-# iniciar os 5 nós (portas publicadas em 127.0.0.1:9001..9005; logs em ./execucao_compose/logs)
+# iniciar os 5 nós (portas em 127.0.0.1:9001..9005; logs em ./execucao_compose/logs)
 docker compose up -d
 docker compose ps
+```
 
-# usar (do host)
-P=1=127.0.0.1:9001,2=127.0.0.1:9002,3=127.0.0.1:9003,4=127.0.0.1:9004,5=127.0.0.1:9005
-python main.py cliente --pares $P put cor azul
-python main.py admin   --pares $P status
+**Quanto esperar.** Depois de `up -d`, o líder costuma aparecer em 1–3 s (o Python dos nós leva
+algumas centenas de ms para subir, e a eleição e a sincronização terminam logo em seguida); se
+o `status` ainda não mostrar líder, espere alguns segundos e repita. Confirme que há líder com
+`admin status` (variável de pares do compose, portas 9001..9005):
 
-# falhas: crash e recuperação
-docker compose kill no5        # SIGKILL: crash do nó 5
-docker compose start no5       # recuperação com o volume de dados preservado
-python main.py admin --pares $P falhas --no 5 --bloquear 1 2 3 4    # partição na aplicação
+```bash
+# bash
+PARES=1=127.0.0.1:9001,2=127.0.0.1:9002,3=127.0.0.1:9003,4=127.0.0.1:9004,5=127.0.0.1:9005
+```
+```powershell
+# PowerShell
+$PARES = "1=127.0.0.1:9001,2=127.0.0.1:9002,3=127.0.0.1:9003,4=127.0.0.1:9004,5=127.0.0.1:9005"
+```
+```bash
+python main.py admin --pares $PARES status
+# esperado: nó 5 com "papel=lider ... pronto=true quorum_ativo=true visao=[1, 2, 3, 4]"
+#           e os nós 1-4 com "papel=seguidor lider=5 pronto=false"
+```
+
+Demonstração (do host, com o Python do sistema; sem dependências):
+
+```bash
+python main.py cliente --pares $PARES put cor azul
+python main.py cliente --pares $PARES get cor
+python main.py admin   --pares $PARES status
+
+# crash e recuperação do nó 5 (kill/start do contêiner; o volume de dados é preservado)
+docker compose kill no5
+docker compose start no5
+python main.py admin --pares $PARES status      # aguarde ~5 s: o nó 5 volta e retoma a liderança (maior id)
+
+# partição na aplicação: o primário isolado fica com quorum_ativo=false
+python main.py admin --pares $PARES falhas --no 5 --bloquear 1 2 3 4
+python main.py admin --pares $PARES status --no 5     # papel=lider pronto=true quorum_ativo=false + aviso
+python main.py admin --pares $PARES falhas --no 5 --limpar
 
 # verificar os logs (invariantes I1-I4; para I5/I6 use `status --dados` ou os testes)
 python main.py verificar --logs execucao_compose/logs
-
-# testar: a suíte pytest usa processos locais; no compose o teste é o roteiro acima + verificador
-
-# remover contêineres, rede e volumes de dados
-docker compose down -v
-rm -rf execucao_compose
 ```
 
-> O `compose.yaml` não pôde ser executado no ambiente de desenvolvimento (Windows sem Docker);
-> a execução local com processos é equivalente, pois só a configuração muda.
+**Testes dentro do contêiner** (serviço `testes`, profile `testes`; mesma suíte de `tests/`, ~30 s):
+
+```bash
+docker compose run --rm testes                              # pytest tests/ -q
+docker compose run --rm testes tests/test_unitarios.py -q   # argumentos extras substituem o padrão
+```
+
+**Experimentos dentro do contêiner** (serviço `experimentos`, profile `experimentos`; os argumentos
+vão para `python main.py experimentos`; as saídas aparecem no host por bind mount de `./resultados`
+e `./resultados_rapido`):
+
+```bash
+docker compose run --rm experimentos --rapido                        # smoke test, ~4 min -> ./resultados_rapido
+docker compose run --rm experimentos --rapido --so E4 --replicas 1   # menor smoke test, ~10 s
+docker compose run --rm experimentos                                 # CAMPANHA COMPLETA (10 réplicas, ~32 min)
+                                                                     # -> ./resultados (SOBRESCREVE os dados versionados)
+```
+
+Dentro desses contêineres os nós continuam sendo processos independentes (`python main.py no ...`)
+que só se comunicam por TCP em `127.0.0.1` do próprio contêiner (`src/cluster.py`). `docker compose
+up -d` **não** inicia `testes` nem `experimentos` (profiles). O `metadados.json` gerado registra
+`"conteiner": true`, a distribuição e o kernel Linux, as CPUs disponíveis (afinidade e limite de
+cgroup), a RAM e as versões; sem repositório git no contêiner o commit só aparece se a variável
+`GIT_COMMIT` for passada (`docker compose run --rm -e GIT_COMMIT=$(git rev-parse HEAD) experimentos ...`).
+No Docker Desktop (Windows/macOS) o contêiner roda numa VM Linux: CPUs e RAM são os da VM. Em Linux
+a conexão a um nó morto falha imediatamente (no Windows leva ~2 s), então os tempos de eleição e
+sincronização medidos no contêiner são de milissegundos. Os dados de `resultados/` são justamente desta campanha em contêiner
+(ver `## Resultados`); medidas em processos locais no Windows dão tempos de eleição bem maiores (≈ `timeout_rpc`) e não são comparáveis.
+
+**Remover tudo.**
+
+```bash
+docker compose down -v --rmi local            # contêineres, rede, volumes de dados e a imagem mc714-t2
+rm -rf execucao_compose resultados_rapido     # pastas geradas (PowerShell: Remove-Item -Recurse -Force execucao_compose, resultados_rapido)
+```
+
+(`resultados/` é entregável versionado: não apague.) `testes` e `experimentos` compartilham a mesma
+imagem, portanto o `down --rmi local` também a remove depois deles.
 
 ## Testes
 
-`python -m pytest tests/ -v`
+`python -m pytest tests/ -v` (host) ou `docker compose run --rm testes` (contêiner Linux); 53 testes.
 
 - `tests/test_unitarios.py` — réplica (ordem, idempotência, lacuna, histórico divergente,
   snapshot), persistência (recuperação, WAL truncado), injeção de falhas (semente, partição,
@@ -310,23 +431,39 @@ rm -rf execucao_compose
     convergem), nó recuperado re-sincroniza e volta à visão, reinício do cluster inteiro a partir do
     disco, escrita sem quórum não é confirmada, **fencing** (primário isolado não confirma; ao curar,
     renuncia e sua escrita não confirmada é descartada) e perda aleatória de mensagens;
+  - `quorum_ativo` do status: o líder isolado fica `pronto=true, quorum_ativo=false` e volta a `true` ao curar;
+  - `main.py cluster` encerra sozinho quando todos os nós que iniciou morrem;
   - todos terminam com o verificador de logs (I1–I6).
 
 ## Resultados
 
-Campanha completa em **37,8 min** (2265 s), 10 réplicas independentes por configuração; cada réplica é um
-cluster novo de processos locais (`Popen`, 127.0.0.1, **sem contêineres**; o `compose.yaml` roda o mesmo código).
-Máquina: Intel Core i5-13420H, 12 núcleos lógicos, 15,7 GB de RAM, Windows 11, Python 3.11.9, numpy 2.3.3,
-matplotlib 3.10.6. Parâmetros, sementes, aquecimento e duração de cada experimento: `resultados/metadados.json`.
+Campanha completa em **32,3 min** (1941 s), 10 réplicas independentes por configuração, executada **dentro de um
+contêiner Docker** (`docker compose run --rm experimentos`): cada réplica é um cluster novo de processos
+independentes (`Popen`, 127.0.0.1) que só se comunicam por TCP, orquestrado por `src/cluster.py`. Não é um contêiner por
+nó (esse arranjo, do `compose up`, foi exercitado como demonstração, não para medidas).
+Ambiente (`resultados/metadados.json`): contêiner Debian 13 (kernel Linux 6.18.54.1-microsoft-standard-WSL2, Docker Desktop
+sobre Windows 11), Intel Core i5-13420H, 12 núcleos lógicos, 7,6 GB de RAM visíveis ao contêiner, Python 3.11.18, numpy 2.4.6,
+matplotlib 3.11.2, pytest 9.2.0. Parâmetros, sementes, aquecimento e duração de cada experimento: `resultados/metadados.json`.
 
 **Reproduzir** (a partir de `T2/`; `--so E1,E3` roda um subconjunto; `--regerar` refaz agregados e gráficos a
 partir de `<saida>/brutos/`, sem medir):
 
 ```
-pip install -r requirements.txt                 # pytest, numpy e matplotlib
-python main.py experimentos --rapido            # smoke test: 2 réplicas, ~5–7 min, grava em resultados_rapido/
-python main.py experimentos                     # campanha completa: 10 réplicas, ~38 min, SOBRESCREVE resultados/
+pip install -r requirements.txt                 # pytest, numpy e matplotlib (sugere-se um venv)
+python main.py experimentos --rapido            # smoke test: 2 réplicas, grava em resultados_rapido/
+python main.py experimentos                     # campanha completa: 10 réplicas, SOBRESCREVE resultados/
 ```
+
+Ou, sem instalar nada no host, dentro do contêiner (Linux; mesmos argumentos; saídas por bind mount):
+
+```
+docker compose run --rm experimentos --rapido   # smoke test -> ./resultados_rapido
+docker compose run --rm experimentos            # campanha completa (~32 min) -> ./resultados (SOBRESCREVE)
+```
+
+Os dados versionados em `resultados/` foram gerados **dentro do contêiner** (comando acima). Uma campanha anterior, como
+processos locais no Windows, foi substituída; seus números (por exemplo, eleição ≈ 0,3 s e custo sempre `N(N−1)` na variante
+natural) **não valem mais** e só existem no histórico do git. Rodar a campanha em outra máquina muda os tempos absolutos.
 
 O modo rápido grava por padrão em `resultados_rapido/` (ignorado pelo git) para não sobrescrever os dados
 versionados da campanha completa; `--saida DIR` escolhe outro diretório.
@@ -341,6 +478,13 @@ por réplica. Tempos com `perf_counter` (campo `p` dos logs). Toda réplica term
 com uma checagem do lado do cliente (toda escrita confirmada está em todas as réplicas vivas): **310 réplicas, 0 erros,
 0 violações, 0 escritas confirmadas perdidas** (coluna `invariantes_ok`). Nenhum processo restou ao final.
 
+**Diferença importante entre Linux e Windows (afeta o E1 e o E3a).** No Bully o candidato chama ELEICAO nos ids maiores e espera
+cada resposta por no máximo `timeout_rpc`; uma falha de conexão retorna `None` (`src/bully.py`, `src/transporte.py`). Em Linux
+(contêiner), conectar a uma porta fechada de localhost é recusado na hora (RST), então a chamada ao nó morto termina em
+milissegundos. No Windows o SO retenta por ~2 s e a chamada só terminava no `timeout_rpc` (por isso a campanha antiga mostrava
+eleição ≈ 0,3 s). Numa rede real em que o nó caído não responde RST (máquina desligada ou inalcançável), o comportamento
+esperado volta a ser dominado por `timeout_rpc`; isso **não foi medido** (`timeout_rpc` ficou fixo em 0,3 s).
+
 ### E1 — Bully: crash do líder (N ∈ {3,5,7,9}); `resultados/e1_agregado.csv`
 
 Mensagens = ELEICAO+OK+COORDENADOR **enviadas** (delta dos contadores; inclui as endereçadas ao nó morto). Teoria: se só o nó `m`
@@ -348,33 +492,38 @@ detecta, os iniciadores são `m..N−1` e o total é `(N−m)²+(N−1)`: melhor
 entregues: N−2), pior caso (`m=1`) = `N(N−1)` = O(N²). As variantes forçadas elevam o `timeout_fd` (30 s) dos demais nós;
 `natural` = todos detectam por timeout.
 
-| N | melhor (só N−1) | médio (só ⌈N/2⌉) | pior (só o nó 1) | natural | teoria: N / (N−m)²+N−1 / N(N−1) |
+| N | melhor (só N−1) | médio (só ⌈N/2⌉) | pior (só o nó 1) | natural: média ± IC95 (mín–máx; mediana) | teoria: N / (N−m)²+N−1 / N(N−1) |
 |--:|--:|--:|--:|--:|--:|
-| 3 | 3 | 3 | 6 | 6 | 3 / 3 / 6 |
-| 5 | 5 | 8 | 20 | 20 | 5 / 8 / 20 |
-| 7 | 7 | 15 | 42 | 42 | 7 / 15 / 42 |
-| 9 | 9 | 24 | 72 | 72 | 9 / 24 / 72 |
+| 3 | 3 | 3 | 6 | 5,4 ± 0,9 (3–6; 6) | 3 / 3 / 6 |
+| 5 | 5 | 8 | 20 | 11,4 ± 4,8 (5–20; 10,5) | 5 / 8 / 20 |
+| 7 | 7 | 15 | 42 | 23,2 ± 9,0 (7–45; 18,5) | 7 / 15 / 42 |
+| 9 | 9 | 24 | 72 | 40,9 ± 17,5 (12–72; 44) | 9 / 24 / 72 |
 
-Desvio padrão **zero** nas 160 réplicas: a contagem é determinística e coincide exatamente com a teoria. Achado: a variante
-*natural* já é o **pior caso**, porque com detecção por timeout o nó de menor id também detecta e a eleição em cascata (cada OK faz o
-nó maior abrir a sua eleição) torna todos os N−1 vivos iniciadores (`n_iniciadores = N−1`). Mensagens entregues (soma nos vivos):
-melhor `N−2`, pior `N(N−2)` (63 para N=9).
+Variantes forçadas (120 réplicas): desvio padrão **zero**, contagem determinística e igual à teoria (`msg_total_env =
+msg_teorico_env` nas 120). A variante **natural** *não* coincide mais com o pior caso: como a conexão ao nó morto é recusada na
+hora, a eleição do primeiro seguidor que detecta termina em poucos ms, antes que os demais detectem. O custo depende de quem
+detecta primeiro (o menor iniciador `m`): a cascata (cada OK faz o nó maior abrir a sua eleição) leva os ids `m..N−1` a
+iniciar. Em 37 das 40 réplicas naturais o total é `(N−m)²+(N−1)` com `N−m = n_iniciadores`; nas 3 restantes (N=7 duas vezes,
+N=9 uma) um nó abriu duas rodadas (`rodadas = n_iniciadores+1`) e somou 3 mensagens; uma delas (45, N=7) excedeu `N(N−1)=42`, ou
+seja, `N(N−1)` é o pior caso para uma rodada por iniciador, não um limite absoluto sob detecções concorrentes. Mais de um nó
+detectou o crash em 12 das 40 réplicas (`n_detectores`). Mensagens entregues (soma nos vivos): melhor `N−2`, pior `N(N−2)`.
 
-Tempos (variante `natural`, média ± IC95, s; as demais variantes são equivalentes dentro do IC):
+Tempos (variante `natural`, média ± IC95; as demais variantes diferem na eleição, ver abaixo):
 
-| N | detecção (kill→1ª suspeita) | eleição (1ª `eleicao_iniciada`→COORDENADOR) | sincronização (→`lider_pronto`) | kill→líder pronto |
+| N | detecção (kill→1ª suspeita, s) | eleição (1ª `eleicao_iniciada`→COORDENADOR, ms) | sincronização (→`lider_pronto`, ms) | kill→líder pronto (s) |
 |--:|--:|--:|--:|--:|
-| 3 | 0,510 ± 0,024 | 0,303 ± 0,004 | 0,301 ± 0,006 | 1,113 ± 0,025 |
-| 5 | 0,482 ± 0,025 | 0,317 ± 0,013 | 0,304 ± 0,008 | 1,104 ± 0,033 |
-| 7 | 0,470 ± 0,030 | 0,314 ± 0,005 | 0,301 ± 0,007 | 1,085 ± 0,034 |
-| 9 | 0,476 ± 0,020 | 0,311 ± 0,008 | 0,311 ± 0,010 | 1,098 ± 0,024 |
+| 3 | 0,474 ± 0,042 | 1,4 ± 0,5 | 2,3 ± 0,2 | 0,478 ± 0,042 |
+| 5 | 0,453 ± 0,025 | 1,4 ± 0,6 | 3,0 ± 0,4 | 0,457 ± 0,025 |
+| 7 | 0,462 ± 0,027 | 2,1 ± 0,7 | 5,2 ± 0,7 | 0,470 ± 0,027 |
+| 9 | 0,470 ± 0,014 | 3,0 ± 1,0 | 7,4 ± 1,4 | 0,480 ± 0,015 |
 
-Análise: a detecção (~0,47–0,54 s) é `timeout_fd` menos a fase do último heartbeat, independente de N. O tempo de eleição **não
-cresce com N**, apesar das O(N²) mensagens: as mensagens de uma rodada vão em paralelo e a eleição termina quando o ELEICAO ao nó
-morto estoura o `timeout_rpc` (0,3 s): o tempo de eleição ≈ T_OK do Bully. Idem a sincronização (SINC_CONSULTA ao nó morto espera
-outros 0,3 s). No Windows conectar a uma porta fechada leva ~2 s em vez de falhar na hora (medido), então toda chamada ao nó morto só
-termina pelo timeout. O custo O(N²) aparece em mensagens/carga, não em latência (em localhost). Gráficos: `e1_mensagens_vs_n`,
-`e1_tempos_vs_n`, `e1_decomposicao`.
+Análise: a detecção (média 0,45–0,47 s na variante natural; 0,46–0,51 s nas demais) é `timeout_fd` menos a fase do último
+heartbeat, independente de N, e responde por mais de 97% do kill→pronto. Eleição e sincronização duram **milissegundos** e
+crescem com N: na variante natural, 1,4–3,0 ms e 2,3–7,4 ms; no pior caso forçado a eleição vai de 1,8 ms (N=3) a 5,0 ms
+(N=9), e no melhor caso fica em 0,6–0,9 ms. O custo O(N²) aparece em mensagens, não em latência (loopback, sem perda). Isso
+decorre de a chamada ao nó morto falhar de imediato (RST); com um nó que apenas se cala, esperaríamos que cada rodada durasse até
+`timeout_rpc` e que os demais detectassem dentro dela, aproximando a variante natural do pior caso (hipótese, não medida).
+Gráficos: `e1_mensagens_vs_n`, `e1_tempos_vs_n`, `e1_decomposicao`.
 
 ### E2 — Primário-backup: latência e vazão (1 cliente síncrono; 6 s medidos após 1,5 s de aquecimento descartado)
 
@@ -383,89 +532,91 @@ Valores: média entre as 10 réplicas ± IC95 (cada réplica gera seu p50/p95/p9
 
 | config | escritas/réplica | vazão (ops/s) | média (ms) | p50 | p95 | p99 | srv p50 | msgs/escrita |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| N=3, 0 ms | 302 | 50,2 ± 3,1 | 20,1 ± 1,3 | 17,7 ± 4,1 | 37,0 ± 0,5 | 40,6 ± 1,1 | 7,1 | 4 |
-| N=5, 0 ms | 228 | 37,8 ± 3,1 | 26,8 ± 2,4 | 25,0 ± 4,3 | 45,4 ± 1,7 | 50,1 ± 1,9 | 12,8 | 8 |
-| N=7, 0 ms | 194 | 32,3 ± 2,3 | 31,3 ± 2,4 | 28,6 ± 4,0 | 55,9 ± 1,8 | 63,1 ± 2,2 | 17,6 | 12 |
-| N=9, 0 ms | 158 | 26,2 ± 1,6 | 38,5 ± 2,8 | 34,2 ± 3,6 | 69,5 ± 1,8 | 75,6 ± 2,0 | 23,5 | 16 |
-| N=5, 5 ms | 167 | 27,7 ± 0,9 | 36,2 ± 1,1 | 35,0 ± 2,1 | 55,7 ± 1,9 | 61,8 ± 1,3 | 23,6 | 8 |
-| N=5, 20 ms | 85 | 14,1 ± 0,3 | 71,2 ± 1,5 | 71,8 ± 2,1 | 88,8 ± 1,8 | 93,2 ± 2,6 | 59,7 | 8 |
+| N=3, 0 ms | 3004 | 501 ± 56 | 2,04 ± 0,26 | 1,96 ± 0,27 | 2,77 ± 0,48 | 3,38 ± 0,56 | 1,23 | 4 |
+| N=5, 0 ms | 1762 | 294 ± 22 | 3,42 ± 0,25 | 3,30 ± 0,24 | 4,46 ± 0,43 | 5,58 ± 0,62 | 2,33 | 8 |
+| N=7, 0 ms | 1357 | 226 ± 11 | 4,43 ± 0,22 | 4,23 ± 0,22 | 6,05 ± 0,38 | 7,70 ± 0,53 | 3,17 | 12 |
+| N=9, 0 ms | 1022 | 170 ± 19 | 6,01 ± 0,77 | 5,62 ± 0,64 | 9,07 ± 1,73 | 12,57 ± 4,50 | 4,35 | 16 |
+| N=5, 5 ms | 436 | 72,6 ± 2,0 | 13,78 ± 0,38 | 13,73 ± 0,36 | 15,26 ± 0,61 | 16,08 ± 0,74 | 12,78 | 8 |
+| N=5, 20 ms | 136 | 22,6 ± 0,2 | 44,24 ± 0,46 | 44,10 ± 0,45 | 45,76 ± 0,60 | 46,48 ± 0,88 | 43,20 | 8 |
 
 Mensagens por escrita (REPLICAR+ACK enviados / escritas no servidor) = **exatamente 2(N−1)** (4, 8, 12, 16), desvio 0, nas 60
-réplicas. A latência cresce ~linearmente com N (o primário abre N−1 conexões e trata N−1 ACK no mesmo laço de eventos): ≈ +2,7 ms
-no `srv p50` por backup adicional. O atraso injetado soma ≈ 2×atraso por escrita (REPLICAR e ACK; os backups em paralelo): `srv p50`
-sobe 10,8 ms (nominal 10) e 46,9 ms (nominal 40). A latência absoluta (≥ 17 ms com N=3) é dominada pelo custo de **abrir uma
-conexão TCP por mensagem** no Windows (medido: `connect` com timeout ≈ 12 ms contra ≈ 2 ms bloqueante) e não representa Linux/contêineres;
-o resultado relevante é a tendência em N e no atraso. Essa quantização torna a distribuição bimodal, daí o IC largo do p50 frente ao de
-p95/p99. Vazão ≈ 1/latência (um cliente; o primário serializa as escritas sob trava). Gráficos: `e2_latencia_vs_n`,
-`e2_latencia_vs_atraso`, `e2_vazao`, `e2_mensagens_por_escrita`.
+réplicas. A latência cresce com N (o primário abre N−1 conexões e trata N−1 ACK no mesmo laço de eventos): `srv p50` sobe de
+1,23 a 4,35 ms de N=3 a 9, ≈ +0,52 ms por backup adicional, e a dispersão também (IC95 do p99: ± 0,56 ms em N=3, ± 4,50 ms em
+N=9). O atraso injetado soma ≈ 2×atraso por escrita (REPLICAR e ACK; os backups em paralelo): `srv p50` sobe 10,4 ms (nominal
+10) e 40,9 ms (nominal 40) sobre os 2,33 ms sem atraso. A vazão cai na mesma proporção (um cliente; o primário serializa as
+escritas sob trava). As latências absolutas valem para loopback num contêiner, com uma conexão TCP por mensagem; para redes
+reais, vale a tendência em N e no atraso. Gráficos: `e2_latencia_vs_n`, `e2_latencia_vs_atraso`, `e2_vazao`,
+`e2_mensagens_por_escrita`.
 
 ### E3a — Failover vs `timeout_fd` (N=5, escritor contínuo, crash do primário; heartbeat = timeout/5)
 
 Janela = maior intervalo entre duas escritas confirmadas consecutivas que cobre o crash (vista pelo cliente).
 `resultados/e3a_agregado.csv`.
 
-| timeout_fd (s) | detecção (s) | eleição | sincronização | kill→pronto | **janela** média ± IC95 | p50 | p95 | p99 |
+| timeout_fd (s) | detecção (s) | eleição | sincronização | kill→pronto (s) | **janela** média ± IC95 (s) | p50 | p95 | p99 |
 |--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| 0,25 | 0,255 | 0,305 | 0,299 | 0,859 | **1,29 ± 0,04** | 1,30 | 1,34 | 1,37 |
-| 0,5 | 0,522 | 0,311 | 0,304 | 1,137 | **1,36 ± 0,21** | 1,18 | 1,79 | 1,81 |
-| 1,0 | 1,052 | 0,310 | 0,303 | 1,664 | **1,96 ± 0,18** | 1,78 | 2,26 | 2,27 |
-| 2,0 | 2,189 | 0,313 | 0,301 | 2,803 | **3,10 ± 0,22** | 2,92 | 3,54 | 3,55 |
+| 0,25 | 0,259 | 2,4 ms | 5,3 ms | 0,267 | **0,292 ± 0,020** | 0,281 | 0,335 | 0,348 |
+| 0,5 | 0,521 | 2,6 ms | 7,2 ms | 0,531 | **0,548 ± 0,012** | 0,543 | 0,577 | 0,586 |
+| 1,0 | 1,036 | 2,0 ms | 3,8 ms | 1,042 | **1,062 ± 0,030** | 1,053 | 1,118 | 1,122 |
+| 2,0 | 2,128 | 2,2 ms | 6,8 ms | 2,137 | **2,166 ± 0,075** | 2,168 | 2,307 | 2,321 |
 
-Análise: indisponibilidade ≈ `timeout_fd + 2·timeout_rpc` + retentativa do cliente. A detecção ≈ `timeout_fd` (compromisso clássico:
-timeout curto reage rápido, mas gera falsas suspeitas, ver E3b); há um piso de ~0,6 s fixo (eleição + sincronização esperando o
-`timeout_rpc` do nó morto; `timeout_rpc` não foi variado). A janela do cliente excede o `kill→lider_pronto` em 0,2–0,45 s: a primeira
-tentativa ao primário morto só falha após o timeout de 0,5 s do cliente e o rodízio ainda revisita o nó morto, daí a bimodalidade
-(p50 < média) em 0,5 e 1,0 s. Nenhuma escrita falhou (o cliente re-tenta) e nenhuma confirmada foi perdida. Gráfico:
-`e3a_janela_vs_timeout` (janela e decomposição).
+Análise: a janela é a detecção mais 0,026–0,037 s (eleição + sincronização somam 6–10 ms; o restante vem da espera de 20–50 ms
+entre retentativas do cliente e da primeira escrita após a eleição). A detecção fica 1,04–1,06 vez `timeout_fd` e a janela
+1,06–1,17 vez: a indisponibilidade é, na prática, `timeout_fd` (compromisso clássico: timeout curto reage rápido, mas gera falsas
+suspeitas, ver E3b). Como a chamada ao primário morto falha de imediato (RST), não aparecem pisos de `timeout_rpc` nem do
+timeout de 0,5 s por tentativa do cliente; numa rede que não recusa conexões, esperaríamos que voltem (hipótese, não medida).
+Nenhuma escrita falhou (`escritas_falhas = 0` nas 40 réplicas) e nenhuma confirmada foi perdida. Gráfico: `e3a_janela_vs_timeout`.
 
-### E3b — Falsas suspeitas vs perda de mensagens (N=5, sem crash; janela de 15 s após 2 s de aquecimento; escritor a ~12/s)
+### E3b — Falsas suspeitas vs perda de mensagens (N=5, sem crash; janela de 15 s após 2 s de aquecimento; escritor a ~20/s)
 
 Como ninguém cai, toda suspeita é falsa (coluna `susp_falsas_revogadas`: a suspeita foi revogada pelo mesmo incarnation). "Detector" =
 `heartbeat_ausente` (seguidor→líder) + `backup_sem_resposta` (líder→backup); `replicar_sem_ack` = remoção de backup durante a escrita.
 Eleições espúrias = `eleicao_iniciada` com motivo ≠ `inicio`. `resultados/e3b_agregado.csv`.
 
-| perda | suspeitas do detector /min | suspeitas por replicação (15 s) | eleições espúrias /min | mudanças de líder (15 s) | escritas OK (15 s) |
-|--:|--:|--:|--:|--:|--:|
-| 0 | 0 | 0 | 0 | 0 | 188 |
-| 0,05 | 5,2 ± 3,3 | 28,0 | 9,2 ± 8,6 | 0 | 75 |
-| 0,10 | 26,0 ± 10,6 | 31,3 | 42,0 ± 15,0 | 0,4 | 47 |
-| 0,20 | 72,4 ± 10,0 | 22,7 | 110 ± 14 | 0,8 | 15 |
+| perda | suspeitas do detector /min | suspeitas totais (15 s) | eleições espúrias /min | mudanças de líder (15 s) | `eleicao_recebida` (15 s) | escritas OK (15 s) |
+|--:|--:|--:|--:|--:|--:|--:|
+| 0 | 0 | 0 | 0 | 0 | 0 | 277,4 ± 1,9 |
+| 0,05 | 5,6 ± 4,3 | 31,2 | 7,6 ± 5,9 | 0 | 1,0 | 95,0 ± 5,7 |
+| 0,10 | 20,8 ± 3,5 | 38,4 | 36,4 ± 7,3 | 0,4 | 5,7 | 48,1 ± 6,6 |
+| 0,20 | 75,2 ± 9,6 | 40,4 | 117,2 ± 24,7 | 2,0 | 16,0 | 15,4 ± 3,3 |
 
-Análise: sem perda, zero falsas suspeitas; a taxa cresce **mais que linearmente** com a perda (um seguidor só suspeita após ~5
-heartbeats seguidos sem chegar, e a perda também derruba ACK e mensagens de eleição, realimentando o processo). Cerca de metade das
-eleições espúrias é `eleicao_recebida` (um seguidor que suspeita arrasta os de id maior). Quase nunca trocam o líder: o líder atual,
-ao receber ELEICAO, responde com heartbeat em vez de reeleger, e as épocas impedem dois primários. Mas custam mensagens e, nos
-raros casos de troca, disponibilidade. O efeito mais visível é na vazão: cada REPLICAR/ACK perdido custa um `timeout_rpc` (0,3 s) e
-a remoção do backup da visão (reentrada por ENTRAR), então as escritas confirmadas caem de 188 para 15 em 15 s com 20% de perda, sem
-perder nenhuma confirmada. Gráfico: `e3b_falsas_suspeitas_vs_perda`. (Jitter não foi variado.)
+Análise: sem perda, zero falsas suspeitas e zero eleições espúrias; a taxa de suspeitas do detector cresce **mais que
+linearmente** com a perda (×3,7 de 5% a 10% e ×3,6 de 10% a 20%; um seguidor só suspeita após ~5 heartbeats seguidos sem
+chegar, e a perda também derruba ACK e mensagens de eleição, realimentando o processo). As suspeitas totais por janela são
+dominadas, nas perdas baixas, por `replicar_sem_ack` (com 5%: 29,8 de 31,2). A troca de líder é rara (média 0,4 e 2,0 por janela
+com 10% e 20%; máximo 2 e 6): o líder atual, ao receber ELEICAO, responde com heartbeat em vez de reeleger, e as épocas impedem
+dois primários. O efeito mais visível é na vazão: cada REPLICAR/ACK perdido custa um `timeout_rpc` (0,3 s) e a remoção do backup
+da visão (reentrada por ENTRAR), e o commit exige quórum, então as escritas confirmadas caem de 277,4 para 15,4 em 15 s com 20%
+de perda (−94%), sem perder nenhuma confirmada. Gráfico: `e3b_falsas_suspeitas_vs_perda`. (Jitter não foi variado.)
 
 ### E4 (bônus) — Partição isolando o primário (N=5, ~4 s de partição, 10 réplicas)
 
 | métrica | média ± IC95 | mín–máx |
 |---|--:|--:|
-| tentativas de escrita no primário isolado | 55,7 ± 1,4 | 52–59 |
+| tentativas de escrita no primário isolado | 72,0 ± 0,3 | 71–73 |
 | **escritas confirmadas pelo primário isolado** | **0 ± 0** | 0–0 (todas `sem_quorum`) |
-| lado majoritário: novo líder (nó 4) pronto após o isolamento (s) | 1,131 ± 0,014 | 1,10–1,16 |
+| lado majoritário: novo líder (nó 4) pronto após o isolamento (s) | 1,000 ± 0,158 | 0,679–1,164 |
 | escritas confirmadas no lado majoritário (de 20) | 20 ± 0 | 20–20 |
-| renúncia do nó 5 após curar (s) | 0,261 ± 0,064 | 0,11–0,38 |
-| nó 5 retoma a liderança (maior id) após curar (s) | 0,487 ± 0,090 | 0,27–0,64 |
-| convergência total após curar (s) | 0,627 ± 0,098 | 0,38–0,77 |
+| renúncia do nó 5 após curar (s) | 0,105 ± 0,051 | 0,015–0,197 |
+| nó 5 retoma a liderança (maior id) após curar (s) | 0,149 ± 0,046 | 0,067–0,235 |
+| convergência total após curar (s) | 0,157 ± 0,045 | 0,078–0,243 |
 | escritas órfãs (do primário isolado) no estado final | 0 | 0–0 |
 
 O quórum de maioria faz o primário isolado nunca confirmar nada; o lado majoritário elege e continua escrevendo; ao curar, o
-primário antigo renuncia pela época maior e tudo converge (I1–I6 ok, 0 confirmadas perdidas, 10/10 réplicas).
+primário antigo renuncia pela época maior e tudo converge (I1–I6 ok, 0 confirmadas perdidas, 10/10 réplicas). O tempo até o nó 4
+ficar pronto é bimodal: 3 réplicas em ≈ 0,68 s e 7 entre 1,11 e 1,16 s (diferença de ≈ 0,44 s; **causa não investigada**).
 
 ### Anomalias e observações
 
-- **Variante natural = pior caso do Bully** (E1): não é bug, é a cascata do algoritmo.
-- **Eleição e sincronização ≈ `timeout_rpc`**: efeito de esperar o nó morto (agravado no Windows, onde conectar a porta fechada leva
-  ~2 s). Não variamos `timeout_rpc`; a relação é inferida do código e dos dados (0,29–0,36 s).
-- **Granularidade do temporizador do Windows**: `asyncio.sleep(0,005)` durava ~16 ms (tick de 15,6 ms), distorcendo o atraso
-  injetado e os timeouts curtos. Corrigido em `main.py` com `timeBeginPeriod(1)` no processo do nó.
-- **Latência absoluta alta** por abrir uma conexão TCP por mensagem no Windows (E2); as conclusões são por tendência.
+- **Variante natural do Bully** (E1): com a conexão recusada na hora (Linux), deixou de ser sempre o pior caso; o custo varia entre
+  `N` e `N(N−1)` conforme quem detecta primeiro, e uma réplica (N=7) chegou a 45 > 42 por uma rodada extra.
+- **Eleição e sincronização em milissegundos** (E1, E3a): efeito de a chamada ao nó morto falhar de imediato; numa rede em que o
+  nó apenas se cala, esperamos tempos dominados por `timeout_rpc` (não medido).
+- **Nós como processos de um único contêiner**: a campanha não usa um contêiner por nó; crash = morte de processo, rede = loopback.
+- **Latência absoluta** de milissegundos (E2): loopback com uma conexão TCP por mensagem; as conclusões são por tendência.
 - Época colidida quando o maior id volta (comportamento conhecido e seguro): nada anômalo observado; I1 sempre satisfeita.
-- Em E3a a janela inclui a retentativa do cliente (timeout de 0,5 s por tentativa); `kill→pronto` é o lado do servidor.
-- `experimentos/` ficou reservado e vazio: a campanha está em `src/experimentos.py` (como o T1).
+- Em E3a a janela inclui a retentativa do cliente (espera de 20–50 ms entre tentativas); `kill→pronto` é o lado do servidor.
+- `experimentos/` só tem um README que aponta para `src/experimentos.py`, onde está a campanha (como no T1).
 
 ## Divisão de trabalho
 
