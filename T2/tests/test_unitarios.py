@@ -266,3 +266,14 @@ def test_verificador_carrega_logs_e_ignora_linha_truncada(tmp_path):
         f.write('{"t": 9, "p": 9, "no"')
     eventos = verificador.carregar_eventos(str(tmp_path))
     assert len(eventos) == 4 and verificador.verificar(eventos).ok
+
+
+def test_resumo_status_destaca_lider_sem_quorum():
+    from src.cliente import resumo_status
+    base = {"papel": "lider", "epoca": 3, "lider": 5, "pronto": True, "visao": [], "seq": 7}
+    sem = resumo_status({**base, "quorum_ativo": False})
+    assert "pronto=true" in sem and "quorum_ativo=false" in sem and "SEM quórum ativo" in sem
+    com = resumo_status({**base, "quorum_ativo": True, "visao": [1, 2, 3, 4]})
+    assert "quorum_ativo=true" in com and "SEM quórum" not in com
+    backup = resumo_status({**base, "papel": "seguidor", "pronto": False, "quorum_ativo": None})
+    assert "quorum_ativo" not in backup

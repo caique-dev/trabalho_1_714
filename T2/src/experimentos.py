@@ -768,7 +768,58 @@ def _cpu_nome():
         nome = _cmd(["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).Name"])
         if nome:
             return nome.splitlines()[0].strip()
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
+            for linha in f:
+                if linha.lower().startswith("model name"):
+                    return linha.split(":", 1)[1].strip()
+    except OSError:
+        pass
     return platform.processor() or platform.machine()
+
+
+def _em_conteiner():
+    """True se o processo roda dentro de um contêiner (Docker/Podman/Kubernetes)."""
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", encoding="utf-8") as f:
+            return any(t in f.read() for t in ("docker", "kubepods", "containerd", "libpod"))
+    except OSError:
+        return False
+
+
+def _cpus_disponiveis():
+    """CPUs que este processo pode usar: afinidade e, em contêiner, limite de cgroup (cpu.max)."""
+    n = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    try:
+        with open("/sys/fs/cgroup/cpu.max", encoding="utf-8") as f:   # cgroup v2
+            cota, periodo = f.read().split()[:2]
+        if cota != "max":
+            n = min(n, round(int(cota) / int(periodo), 2))
+    except (OSError, ValueError):
+        pass
+    return n
+
+
+def _so_descricao():
+    """Sistema operacional: no Linux, o nome da distribuição (os-release) e o kernel."""
+    base = f"{platform.system()} {platform.release()} ({platform.version()})"
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            info = dict(l.strip().split("=", 1) for l in f if "=" in l)
+        return f"{info.get('PRETTY_NAME', '').strip(chr(34))}; kernel {base}"
+    except OSError:
+        return base
+
+
+def _git_info():
+    commit = _cmd(["git", "rev-parse", "HEAD"]) or os.environ.get("GIT_COMMIT", "")
+    if commit and _cmd(["git", "rev-parse", "HEAD"]):
+        return {"commit": commit, "arvore_com_alteracoes": bool(_cmd(["git", "status", "--porcelain"]))}
+    # Sem repositório (ex.: imagem Docker, que não contém .git): commit só se informado em GIT_COMMIT.
+    return {"commit": commit or None, "arvore_com_alteracoes": None,
+            "observacao": "sem repositório git no ambiente de execução"}
 
 
 def _versoes():
@@ -793,19 +844,26 @@ def escrever_metadados(saida, info, inicio, duracao, rapido, reps):
             meta = {}
     exps = meta.get("experimentos", {})
     exps.update(info)
+    conteiner = _em_conteiner()
     meta.update({
-        "modo_execucao": "processos locais independentes (python main.py no ...), 127.0.0.1, "
-                         "SEM contêineres/Docker (mesmo código que o compose.yaml)",
+        "modo_execucao": (
+            "processos independentes (python main.py no ...) em 127.0.0.1 DENTRO de um contêiner "
+            "Docker (serviço `experimentos` do compose.yaml; os nós só se comunicam por TCP)"
+            if conteiner else
+            "processos locais independentes (python main.py no ...), 127.0.0.1, "
+            "SEM contêineres/Docker (mesmo código que o compose.yaml)"),
+        "conteiner": conteiner,
         "rapido": rapido,
         "data_inicio_ultima_execucao": inicio,
         "duracao_ultima_execucao_s": duracao,
-        "comando": "python main.py experimentos" + (" --rapido" if rapido else ""),
-        "hardware": {"cpu": _cpu_nome(), "nucleos_logicos": os.cpu_count(), "ram_gb": _ram_gb(),
+        "comando": ("docker compose run --rm experimentos " + " ".join(sys.argv[2:])).strip()
+                   if conteiner else "python main.py " + " ".join(sys.argv[1:]),
+        "hardware": {"cpu": _cpu_nome(), "nucleos_logicos": os.cpu_count(),
+                     "cpus_disponiveis": _cpus_disponiveis(), "ram_gb": _ram_gb(),
                      "maquina": platform.machine(), "hostname": socket.gethostname()},
-        "so": f"{platform.system()} {platform.release()} ({platform.version()})",
+        "so": _so_descricao(),
         "python": sys.version, "bibliotecas": _versoes(),
-        "git": {"commit": _cmd(["git", "rev-parse", "HEAD"]),
-                "arvore_com_alteracoes": bool(_cmd(["git", "status", "--porcelain"]))},
+        "git": _git_info(),
         "relogio": "time.perf_counter (campo p dos logs), comparável entre processos",
         "replicas_por_configuracao": reps,
         "experimentos": exps,

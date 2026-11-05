@@ -103,6 +103,27 @@ def status(endereco, incluir_dados=False, timeout=1.0):
     return None if r is None else r["dados"]
 
 
+def resumo_status(s):
+    """Linha legível do status de um nó, destacando se o líder tem quórum ativo agora.
+
+    ``pronto`` diz apenas que o líder concluiu a sincronização da sua época;
+    ``quorum_ativo`` diz se ele ainda enxerga a maioria (membros da visão com
+    resposta recente). Um líder isolado por partição continua ``pronto``, mas
+    com ``quorum_ativo=false`` não confirma escritas nem serve leituras.
+    """
+    partes = [f"papel={s['papel']}", f"epoca={s['epoca']}", f"lider={s['lider']}",
+              f"pronto={str(s['pronto']).lower()}"]
+    qa = s.get("quorum_ativo")
+    if qa is not None:
+        partes.append(f"quorum_ativo={str(qa).lower()}")
+    partes += [f"visao={s['visao']}", f"seq={s['seq']}"]
+    linha = " ".join(partes)
+    if s["papel"] == "lider" and qa is False:
+        linha += ("\n  >>> ATENÇÃO: líder SEM quórum ativo (isolado ou maioria indisponível): "
+                  "não confirma escritas nem serve leituras")
+    return linha
+
+
 def configurar_falhas(endereco, timeout=1.0, **config):
     """Altera a injeção de falhas de um nó (ver ``InjetorFalhas.configurar``)."""
     r = chamar_no(endereco, M.ADM_FALHAS, config, timeout, origem="admin")

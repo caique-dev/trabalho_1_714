@@ -89,6 +89,13 @@ def test_bully_varias_falhas(criar_cluster):
 def test_heartbeat_registra_suspeita_quando_lider_morre(criar_cluster):
     c = criar_cluster(5)
     c.aguardar_lider(esperado=5)
+    # Na subida os nós iniciam escalonados (em Linux, até centenas de ms) e podem disputar a mesma
+    # época; uma eleição agendada por esse conflito ainda pode disparar logo depois de o líder ser
+    # eleito (atraso aleatório < 2*heartbeat). Esperar o assentamento garante que a eleição após o
+    # kill seja causada pela suspeita (o que o teste verifica) e não por esse resíduo.
+    c.aguardar_convergencia()
+    time.sleep(0.6)
+    assert c.aguardar_lider(esperado=5, timeout=5) == 5
     t_kill = time.time()
     c.matar(5)
     c.aguardar_lider(esperado=4)
@@ -102,6 +109,11 @@ def test_falsa_suspeita_e_registrada_e_revogada(criar_cluster):
     """Pares 1 e 5 ficam incomunicáveis (sem crash): 1 suspeita de 5; ao curar, a suspeita é falsa."""
     c = criar_cluster(5)
     c.aguardar_lider(esperado=5)
+    # Na subida, um conflito de época pode deixar uma eleição agendada (com atraso
+    # aleatório) mesmo depois de o líder 5 ser aceito; enquanto ela corre, o seguidor
+    # não registra suspeita. Espera-se que nenhum nó tenha eleição pendente.
+    c.aguardar(lambda: not any(s["eleicao_ativa"] for s in c.status_vivos().values()),
+               10, "nenhuma eleição pendente")
     c.falhas(1, bloqueados=[5])
     c.falhas(5, bloqueados=[1])
     c.aguardar(lambda: eventos(c, "suspeita", no=1, alvo=5), 10, "nó 1 suspeita do líder")
@@ -296,10 +308,66 @@ def test_status_expoe_contadores_e_estado(criar_cluster):
     c = criar_cluster(5)
     c.aguardar_lider(esperado=5)
     s = c.status(5)
-    for campo in ("papel", "lider", "epoca", "visao", "seq", "contadores", "quorum", "pronto"):
+    for campo in ("papel", "lider", "epoca", "visao", "seq", "contadores", "quorum", "pronto",
+                  "quorum_ativo"):
         assert campo in s
-    assert s["contadores"]["enviadas"]["HEARTBEAT"] > 0
-    assert c.status(4)["contadores"]["recebidas"]["HEARTBEAT"] > 0
+    # Em Linux a eleição termina em milissegundos: o status pode ser lido antes do
+    # primeiro heartbeat (intervalo de 0,1 s), então espera-se o contador aparecer.
+    c.aguardar(lambda: c.status(5)["contadores"]["enviadas"].get("HEARTBEAT", 0) > 0
+               and c.status(4)["contadores"]["recebidas"].get("HEARTBEAT", 0) > 0,
+               5, "heartbeats contados no líder e no seguidor")
     # eventos com timestamp no log (a fase 2 mede tempos a partir deles)
     pronto = eventos(c, "lider_pronto", no=5)[0]
     assert {"t", "p", "epoca", "duracao_sync"} <= set(pronto)
+
+
+def test_status_lider_isolado_expoe_quorum_ativo_falso(criar_cluster):
+    """Líder isolado continua papel=lider/pronto=true (o protocolo não mudou), mas o status
+    informa que ele não tem quórum ativo; ao curar a partição o campo volta a ser verdadeiro."""
+    c = criar_cluster(5)
+    c.aguardar_lider(esperado=5)
+    assert c.status(5)["quorum_ativo"] is True
+    assert c.status(4)["quorum_ativo"] is None        # backup: o campo só vale para o líder
+
+    c.isolar(5)
+    c.aguardar(lambda: c.status(5)["quorum_ativo"] is False, 10, "líder isolado perder o quórum ativo")
+    s = c.status(5)
+    assert s["papel"] == "lider" and s["pronto"] is True   # semântica de `pronto` inalterada
+    assert "SEM quórum ativo" in cli.resumo_status(s)
+
+    c.curar()
+    c.aguardar(lambda: c.lider_consensual() is not None and
+               c.status(c.lider_consensual())["quorum_ativo"] is True, 30, "quórum ativo após curar")
+    assert "SEM quórum" not in cli.resumo_status(c.status(c.lider_consensual()))
+
+
+def test_cluster_encerra_sozinho_quando_todos_os_nos_morrem(tmp_path):
+    """`main.py cluster` termina por conta própria quando nenhum nó que ele iniciou está vivo."""
+    import subprocess
+    import sys
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    proc = subprocess.Popen(
+        [sys.executable, os.path.join(raiz, "main.py"), "cluster", "--n", "3",
+         "--dir", str(tmp_path / "exec"), "--heartbeat", "0.1", "--timeout-fd", "0.5",
+         "--timeout-rpc", "0.3"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", cwd=raiz)
+    try:
+        pares = None
+        for linha in proc.stdout:
+            if linha.startswith("--pares "):
+                pares = linha.split(None, 1)[1].strip()
+            if linha.startswith("Líder eleito"):
+                break
+        assert pares, "o orquestrador não imprimiu --pares"
+        for i in (1, 2, 3):
+            r = subprocess.run([sys.executable, os.path.join(raiz, "main.py"), "admin",
+                                "--pares", pares, "matar", "--no", str(i)],
+                               capture_output=True, text=True, cwd=raiz, timeout=15)
+            assert r.returncode == 0, r.stdout + r.stderr
+        resto = proc.communicate(timeout=20)[0]
+        assert proc.returncode == 0
+        assert "terminaram" in resto
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

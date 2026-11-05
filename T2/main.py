@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import sys
 import time
 
@@ -104,9 +105,11 @@ def cmd_cluster(args):
         pares = ",".join(f"{i}={h}:{p}" for i, (h, p) in sorted(c.enderecos.items()))
         print(f"--pares {pares}")
         # flush: a linha --pares precisa aparecer mesmo com a saída redirecionada.
-        print(f"Líder eleito: nó {lider}. Logs em {c.dir_logs}; Ctrl+C encerra.", flush=True)
-        while True:
+        print(f"Líder eleito: nó {lider}. Logs em {c.dir_logs}; Ctrl+C encerra "
+              "(ou encerra sozinho quando todos os nós iniciados por ele morrerem).", flush=True)
+        while c.vivos():
             time.sleep(1.0)
+        print("Todos os nós iniciados por este orquestrador terminaram; encerrando.", flush=True)
     except KeyboardInterrupt:
         pass
     finally:
@@ -135,7 +138,11 @@ def cmd_admin(args):
         alvos = [args.no] if args.no else sorted(enderecos)
         for i in alvos:
             s = cli.status(enderecos[i], incluir_dados=args.dados)
-            print(f"no {i}: " + (json.dumps(s, ensure_ascii=False) if s else "sem resposta"))
+            if not s:
+                print(f"no {i}: sem resposta")
+                continue
+            print(f"no {i}: {cli.resumo_status(s)}")
+            print(f"  {json.dumps(s, ensure_ascii=False)}")
     elif args.acao == "falhas":
         r = cli.configurar_falhas(
             enderecos[args.no], prob_descarte=args.descarte, atraso_fixo=args.atraso,
@@ -147,6 +154,12 @@ def cmd_admin(args):
         s = cli.status(enderecos[args.no])
         if not s:
             print("nó sem resposta")
+            return 1
+        # O pid só vale na máquina onde o nó roda: contra um nó em contêiner ele
+        # apontaria para outro processo do host. Recusa e indica o comando certo.
+        if s.get("host") not in (None, socket.gethostname()):
+            print(f"nó {args.no} roda em outro host ({s['host']}); 'matar' só serve para "
+                  f"nós locais. Em contêiner, use: docker compose kill no{args.no}")
             return 1
         os.kill(s["pid"], signal.SIGTERM)
         print(f"nó {args.no} (pid {s['pid']}) encerrado abruptamente")

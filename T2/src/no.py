@@ -17,6 +17,7 @@ no máximo um líder por época chegue a servir escritas).
 import asyncio
 import os
 import random
+import socket
 import time
 
 from . import mensagens as M
@@ -231,9 +232,12 @@ class No:
     def status(self, incluir_dados=False):
         r = self.replicacao
         s = {
-            "id": self.id, "pid": os.getpid(), "inc": self.inc,
+            "id": self.id, "pid": os.getpid(), "host": socket.gethostname(), "inc": self.inc,
             "papel": self.papel, "lider": self.lider, "epoca": self.epoca,
             "pronto": r.pronto, "visao": sorted(r.visao),
+            # Só informativo (o protocolo não o usa): o líder tem, agora, um quórum de
+            # membros que responderam há menos de timeout_fd? None se não é líder.
+            "quorum_ativo": r.tem_quorum_vivo() if self.papel == LIDER else None,
             "seq": self.replica.seq, "ult_epoca": self.replica.ult_epoca,
             "n_chaves": len(self.replica.dados), "hash": self.replica.hash_estado(),
             "eleicao_ativa": self.bully.ativa, "quorum": self.quorum, "n_total": self.n_total,
